@@ -1,0 +1,84 @@
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- Python bytecode / caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pyre/
+.tox/
+.nox/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Virtual environments / local Python tooling ---
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# --- Packaging / build artifacts ---
+build/
+dist/
+site/
+*.egg-info/
+.eggs/
+*.egg
+
+# --- Notebook checkpoints ---
+.ipynb_checkpoints/
+
+# --- Logs / runtime outputs ---
+*.log
+*.out
+*.err
+
+# --- Local environment files ---
+.env
+.env.*
+!.env.example
+
+# --- Project-specific generated outputs ---
+**/recordings/
+**/frames/
+**/screenshots/
+**/output/
+**/results/
+**/Results/
+**/outputs/
+**/Outputs/
+**/tmp/
+**/temp/
+**/cache/
+**/logs/
+
+# --- Target definition assets ---
+SwarmCapture+/Targets/
+
+# --- Simulation/binary artifacts ---
+*.pkl
+*.pickle
+*.npz
+*.npy
+*.h5
+*.hdf5
+*.bag
+*.mp4
+*.avi
+*.gif
+
+# --- Known project output locations ---
+DDFGO++/Results/
+SwarmCapture+/performance.json
