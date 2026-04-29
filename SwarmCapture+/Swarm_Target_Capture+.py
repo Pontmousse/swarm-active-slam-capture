@@ -20,6 +20,7 @@ import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
+import textwrap
 
 
 @dataclass
@@ -733,10 +734,10 @@ for i in range(num_iter):
             pickle.dump(Target_History, file)
         print('Saved successfully')
 
-        # print('\nSaving target PCD history pickle file...')
-        # with open('/home/elghali/Desktop/SwarmCapture+/Data/Target_PointCloud'+tag+'.pkl', 'wb') as file:
-        #     pickle.dump(Target_Point_Cloud_History, file)
-        # print('Saved successfully')
+        print('\nSaving target PCD history pickle file...')
+        with open(os.path.join(paths["data_dir"], 'Target_PointCloud'+tag+'.pkl'), 'wb') as file:
+            pickle.dump(Target_Point_Cloud_History, file)
+        print('Saved successfully')
 
         print('\nSaving attachment points history pickle file...')
         with open(os.path.join(paths["data_dir"], 'Attachment_Points'+tag+'.pkl'), 'wb') as file:
@@ -929,10 +930,10 @@ with open(os.path.join(paths["data_dir"], 'Target_History'+tag+'.pkl'), 'wb') as
     pickle.dump(Target_History, file)
 print('Saved successfully')
 
-# print('\nSaving target PCD history pickle file...')
-# with open('/home/elghali/Desktop/SwarmCapture+/Data/Target_PointCloud'+tag+'.pkl', 'wb') as file:
-#     pickle.dump(Target_Point_Cloud_History, file)
-# print('Saved successfully')
+print('\nSaving target PCD history pickle file...')
+with open(os.path.join(paths["data_dir"], 'Target_PointCloud'+tag+'.pkl'), 'wb') as file:
+    pickle.dump(Target_Point_Cloud_History, file)
+print('Saved successfully')
 
 print('\nSaving attachment points history pickle file...')
 with open(os.path.join(paths["data_dir"], 'Attachment_Points'+tag+'.pkl'), 'wb') as file:
@@ -948,7 +949,17 @@ print('\n')
 """
 
 
-def _execute_script_body(config: SimulationConfig):
+def _split_legacy_script_body():
+    marker_loop = "\nfor i in range(num_iter):"
+    marker_teardown = "\np.resetSimulation()"
+    if marker_loop not in SCRIPT_BODY or marker_teardown not in SCRIPT_BODY:
+        raise RuntimeError("Unable to split legacy script body into init/step/final sections.")
+    init_code, remainder = SCRIPT_BODY.split(marker_loop, 1)
+    loop_code, final_code = remainder.split(marker_teardown, 1)
+    return init_code, textwrap.dedent(loop_code), "p.resetSimulation()" + final_code
+
+
+def _build_exec_globals(config: SimulationConfig):
     exec_globals = {
         "__name__": "__main__",
         "__file__": __file__,
@@ -958,15 +969,161 @@ def _execute_script_body(config: SimulationConfig):
         "__resolved_paths": _resolve_simulation_paths(config),
     }
     exec_globals.update(globals())
-    exec(compile(SCRIPT_BODY, __file__, "exec"), exec_globals, exec_globals)
     return exec_globals
 
 
-def run_simulation(config=None):
+def initialize_simulation(config=None):
     runtime_config = config if config is not None else build_default_simulation_config()
     if not isinstance(runtime_config, SimulationConfig):
         raise TypeError("run_simulation expects a SimulationConfig instance or None.")
-    return _execute_script_body(runtime_config)
+    init_code, loop_code, final_code = _split_legacy_script_body()
+    sim_state = _build_exec_globals(runtime_config)
+    exec(compile(init_code, __file__, "exec"), sim_state, sim_state)
+    sim_state["_loop_code"] = loop_code
+    sim_state["_final_code"] = final_code
+    sim_state["current_iteration"] = 0
+    sim_state["performance"] = None
+    return sim_state
+
+
+def step_simulation(sim_state, agents_commands=None):
+    _ = agents_commands
+    i = sim_state["current_iteration"]
+    if i >= sim_state["num_iter"]:
+        return {
+            "iteration": i,
+            "sim_time": i * sim_state["dt"],
+            "dt": sim_state["dt"],
+            "done": True,
+            "agents_true_state": [],
+            "target_true_state": [],
+            "agent_observations": [],
+            "communication_sets": [],
+        }
+    sim_state["i"] = i
+    exec(compile(sim_state["_loop_code"], __file__, "exec"), sim_state, sim_state)
+    sim_state["current_iteration"] = i + 1
+
+    latest_agents = sim_state["Agents_History"][-1]
+    simulation_frame = {
+        "iteration": i,
+        "sim_time": i * sim_state["dt"],
+        "dt": sim_state["dt"],
+        "done": sim_state["current_iteration"] >= sim_state["num_iter"],
+        "agents_true_state": [copy.deepcopy(agent["State"]) for agent in latest_agents],
+        "target_true_state": copy.deepcopy(sim_state["Target_History"][-1]),
+        "agent_observations": [copy.deepcopy(agent.get("LandSet", [])) for agent in latest_agents],
+        "communication_sets": [copy.deepcopy(agent.get("CommSet", [])) for agent in latest_agents],
+        "target_point_cloud": copy.deepcopy(sim_state["Target_Point_Cloud_History"][-1]),
+    }
+    return simulation_frame
+
+
+def save_simulation_outputs(sim_state):
+    tag = sim_state["tag"]
+    paths = sim_state["paths"]
+    data = {
+        "positions": sim_state["positions"],
+        "orientations": sim_state["orientations"],
+    }
+    df = pd.DataFrame(data)
+    output_file = os.path.join(paths["data_dir"], "simulation_data" + tag + ".xlsx")
+    with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
+        df.to_excel(writer, sheet_name="Sheet1", index=False)
+
+    with open(os.path.join(paths["data_dir"], "Agents_History" + tag + ".pkl"), "wb") as file:
+        pickle.dump(sim_state["Agents_History"], file)
+    with open(os.path.join(paths["data_dir"], "Target_History" + tag + ".pkl"), "wb") as file:
+        pickle.dump(sim_state["Target_History"], file)
+    with open(os.path.join(paths["data_dir"], "Target_PointCloud" + tag + ".pkl"), "wb") as file:
+        pickle.dump(sim_state["Target_Point_Cloud_History"], file)
+    with open(os.path.join(paths["data_dir"], "Attachment_Points" + tag + ".pkl"), "wb") as file:
+        pickle.dump(sim_state["attachment_points"], file)
+
+
+def compute_performance_metrics(sim_state):
+    Agents_History = sim_state["Agents_History"]
+    attachment_points = sim_state["attachment_points"]
+    dt = sim_state["dt"]
+    N = sim_state["N"]
+    sim_params = sim_state["sim_params"]
+    cond_viz = sim_state.get("cond_viz", False)
+    fuel_penality = 0
+    for Agent in Agents_History[-1]:
+        fuel_penality += Agent["Fuel_Consumed"]
+    fuel_reward = 1 / fuel_penality
+
+    docked = 0
+    num_iter = len(Agents_History)
+    total_steps_remained = 0
+    for a in range(N):
+        if Agents_History[-1][a]["DockTime"] is not None and Agents_History[-1][a]["Mode"] == "d":
+            total_steps_remained += num_iter - Agents_History[-1][a]["DockTime"]
+            docked += 1
+    agents_docked_reward = 100 * docked
+    agents_remained_time = total_steps_remained * dt
+    dock_reward = agents_docked_reward + agents_remained_time
+
+    force_spike_penality = 0
+    for a in range(N):
+        for i in range(1, num_iter):
+            Spacecraft = Agents_History[i][a]
+            Spacecraft_prev = Agents_History[i - 1][a]
+            force = np.linalg.norm(Spacecraft["Control_Force"])
+            force_prev = np.linalg.norm(Spacecraft_prev["Control_Force"])
+            force_spike_penality += abs(force - force_prev) / dt
+    force_spike_reward = N * num_iter / force_spike_penality
+
+    contact_velocity = 0
+    for a in range(N):
+        if Agents_History[-1][a]["DockTime"] is not None:
+            dock_iter = Agents_History[-1][a]["DockTime"]
+            target_index = Agents_History[dock_iter][a]["Target"]
+            attachment_point = C.extract_attachment_point(attachment_points, target_index)
+            target_vel = np.linalg.norm(attachment_point.velocity[dock_iter])
+            agent_vel = np.linalg.norm(Agents_History[dock_iter - 5][a]["State"][3:6])
+            contact_velocity += abs(target_vel - agent_vel)
+    contact_velocity_reward = 1 / contact_velocity if contact_velocity != 0 else 0
+
+    pointing_error = 0
+    for a in range(N):
+        for i in range(num_iter):
+            Spacecraft = Agents_History[i][a]
+            if len(Spacecraft["Control_Frame"]) != 0:
+                state = "Smooth_State"
+                r = np.array([Spacecraft[state][0], Spacecraft[state][1], Spacecraft[state][2]])
+                q = Spacecraft[state][6:10]
+                ang_vel = np.array([Spacecraft[state][10], Spacecraft[state][11], Spacecraft[state][12]])
+                ort = Spacecraft["Control_Frame"]
+                _, axis_error, ang_error = C.point_agent(r, q, ang_vel, ort, sim_params, cond_viz)
+                pointing_error += np.linalg.norm(axis_error) * ang_error
+    pointing_reward = N * num_iter / pointing_error
+
+    w1, w2, w3, w4, w5 = sim_state["cfg"]["performance_weights"]
+    performance = w1 * dock_reward + w2 * fuel_reward + w3 * force_spike_reward + w4 * contact_velocity_reward + w5 * pointing_reward
+    sim_state["performance"] = performance
+    with open(sim_state["paths"]["performance_file"], "w") as f:
+        json.dump(performance, f)
+    return performance
+
+
+def teardown_simulation(sim_state):
+    try:
+        p.resetSimulation()
+    finally:
+        p.disconnect()
+
+
+def run_simulation(config=None):
+    sim_state = initialize_simulation(config=config)
+    try:
+        while sim_state["current_iteration"] < sim_state["num_iter"]:
+            step_simulation(sim_state)
+        save_simulation_outputs(sim_state)
+        performance = compute_performance_metrics(sim_state)
+        return {"performance": performance, "tag": sim_state["tag"], "data_dir": sim_state["paths"]["data_dir"]}
+    finally:
+        teardown_simulation(sim_state)
 
 
 def main():
