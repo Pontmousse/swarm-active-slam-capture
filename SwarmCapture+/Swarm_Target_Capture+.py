@@ -17,6 +17,99 @@ import Ray_Cast_Lidar as rcl
 import copy
 import pickle
 import json
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Optional
+
+
+@dataclass
+class SimulationConfig:
+    antflk_radius: float = 100
+    flk_radius: float = 4
+    pointing_proportional_gain: float = 3
+    pointing_derivative_gain: float = 0.5
+    flk_potential: float = 1
+    antflk_potential: float = 7000
+    encapsulate_derivative_gain: float = 200
+    capture_proportional_gain: float = 5
+    capture_derivative_gain: float = 100
+    capture_alignment_gain: float = 5
+    distance_bid_weight: float = 20
+    velocity_bid_weight: float = 1
+    normal_bid_weight: float = 1
+    max_force: float = 2
+    max_torque: float = 0.5
+    num_agents: int = 6
+    duration_seconds: float = 150
+    cancel_chw: bool = False
+    altitude_km: float = 500
+    low_pass_filter_coeff_state: float = 0.1
+    low_pass_filter_coeff_control: float = 0.4
+    collision_radius: float = 5
+    detection_radius: float = 100
+    attachment_detection_radius_scale: float = 2
+    communication_radius: float = 300
+    communication_delay_seconds: float = 0
+    imu_enabled: bool = True
+    feature_observation_std: float = 0
+    max_lidar_pcd: float = 3
+    max_angle_pcd: float = 0.3
+    num_features: int = 3
+    camera_distance: float = 8.46
+    camera_yaw: float = -50.0
+    camera_pitch: float = -25.0
+    camera_target_position: tuple = (-6.02, -3.66, 0.60)
+    num_rays_theta: int = 20
+    num_rays_phi: int = 20
+    visualize_rays: bool = False
+    visualize_hits: bool = False
+    visualize_fraction: float = 0.3
+    lidar_fov: float = np.pi / 2
+    viz_target_pcd: bool = False
+    voxel: int = 1
+    viz_agent_pcd: bool = False
+    ds: int = 3
+    dt: float = 1 / 240
+    target_velocity: tuple = (0.0, 0.0, 0.0)
+    target_angular_velocity: tuple = (0.005, -0.01, 0.01)
+    viz_interval_seconds: float = 0.1
+    save_interval_seconds: float = 5.0
+    performance_weights: tuple = (1, 1, 1000, 1, 10)
+    seed: Optional[int] = None
+    target_texture_relpath: str = "Targets/Texture_Target.jpg"
+    cube_obj_relpath: str = "Cube_Blender/Cube.obj"
+    cube_texture_relpath: str = "Cube_Blender/Texture_Cube.png"
+    data_dir_relpath: str = "Data"
+    performance_relpath: str = "performance.json"
+
+
+def build_default_simulation_config() -> SimulationConfig:
+    return SimulationConfig()
+
+
+def _resolve_simulation_paths(config: SimulationConfig) -> dict:
+    base_dir = Path(__file__).resolve().parent
+    paths = {
+        "target_texture": base_dir / config.target_texture_relpath,
+        "cube_obj": base_dir / config.cube_obj_relpath,
+        "cube_texture": base_dir / config.cube_texture_relpath,
+        "data_dir": base_dir / config.data_dir_relpath,
+        "performance_file": base_dir / config.performance_relpath,
+    }
+    for key in ("target_texture", "cube_obj", "cube_texture"):
+        if not paths[key].exists():
+            raise FileNotFoundError(f"Missing required asset for simulation: {paths[key]}")
+    paths["data_dir"].mkdir(parents=True, exist_ok=True)
+    return {k: str(v) for k, v in paths.items()}
+
+SCRIPT_BODY = r"""
+
+cfg = __runtime_cfg
+paths = __resolved_paths
+
+if cfg.get("seed") is not None:
+    random.seed(cfg["seed"])
+    np.random.seed(cfg["seed"])
 
 # Connect to PyBullet and set up the simulation
 physicsClient = p.connect(p.DIRECT)
@@ -28,80 +121,80 @@ p.setGravity(0, 0, 0)
 ########################## Tunable Hyperparameters ############################
 # Instantiate the SimulationParameters class
 sim_params = ss.SimulationParameters(
-    AntFlk_Radius = 100,
-    Flk_Radius = 4,
+    AntFlk_Radius = cfg["antflk_radius"],
+    Flk_Radius = cfg["flk_radius"],
     
-    Pointing_Proportional_Gain = 3,
-    Pointing_Derivative_Gain = 0.5,
+    Pointing_Proportional_Gain = cfg["pointing_proportional_gain"],
+    Pointing_Derivative_Gain = cfg["pointing_derivative_gain"],
     
-    Flk_Potential = 1,
-    AntFlk_Potential = 7000,
-    Encapsulate_Derivative_Gain = 200,
+    Flk_Potential = cfg["flk_potential"],
+    AntFlk_Potential = cfg["antflk_potential"],
+    Encapsulate_Derivative_Gain = cfg["encapsulate_derivative_gain"],
     
-    Capture_Proportional_Gain = 5,
-    Capture_Derivative_Gain = 100,
-    Capture_Alignment_Gain = 5,
+    Capture_Proportional_Gain = cfg["capture_proportional_gain"],
+    Capture_Derivative_Gain = cfg["capture_derivative_gain"],
+    Capture_Alignment_Gain = cfg["capture_alignment_gain"],
     
-    Distance_bid_weight = 20,
-    Velocity_bid_weight = 1,
-    Normal_bid_weight = 1
+    Distance_bid_weight = cfg["distance_bid_weight"],
+    Velocity_bid_weight = cfg["velocity_bid_weight"],
+    Normal_bid_weight = cfg["normal_bid_weight"]
 )
 
 Rant = sim_params.AntFlk_Radius
 Rflk = sim_params.Flk_Radius
 
 # thrust saturation
-max_frc = 2
-max_trq = 0.5
+max_frc = cfg["max_force"]
+max_trq = cfg["max_torque"]
 
 ############################### Hyperparameters ##############################
-N = 6 # Number of Agents_Bodies
-duration = 150 # seconds of simulation
+N = cfg["num_agents"] # Number of Agents_Bodies
+duration = cfg["duration_seconds"] # seconds of simulation
 
-cancel_chw = False
-altitude = 500 # in km
-low_pass_filter_coeff_state = 0.1 # for filtering state estimation
-low_pass_filter_coeff_control = 0.4 # for filtering control input command
+cancel_chw = cfg["cancel_chw"]
+altitude = cfg["altitude_km"] # in km
+low_pass_filter_coeff_state = cfg["low_pass_filter_coeff_state"] # for filtering state estimation
+low_pass_filter_coeff_control = cfg["low_pass_filter_coeff_control"] # for filtering control input command
 
-Rcol = 5  # Collision radius
-Rdet = 100  # Detection radius
-Rdet_ap = Rflk*2 # Attachment Point Detection Radius
-Rcom = 300  # Communication radius
+Rcol = cfg["collision_radius"]  # Collision radius
+Rdet = cfg["detection_radius"]  # Detection radius
+Rdet_ap = Rflk * cfg["attachment_detection_radius_scale"] # Attachment Point Detection Radius
+Rcom = cfg["communication_radius"]  # Communication radius
 
 
-delay = 0  # s - this is the frequency of communication. 0 for perfect comms, no delay.
+delay = cfg["communication_delay_seconds"]  # s - this is the frequency of communication. 0 for perfect comms, no delay.
 
-IMU = True # If IMU is available (Allows better initialization of ICP)
-std = 0 # (unit: m) Gaussian standard deviation for feature observation
-max_lidar_pcd = 3 # (unit: m) Distance to check between URDF and PLY model for feature identification
-max_angle_pcd = 0.3 # (unit: degrees) Angle that should be between normals of point cloud and line of sight
-num_feat = 3 # Number of features to extract per observation instance
+IMU = cfg["imu_enabled"] # If IMU is available (Allows better initialization of ICP)
+std = cfg["feature_observation_std"] # (unit: m) Gaussian standard deviation for feature observation
+max_lidar_pcd = cfg["max_lidar_pcd"] # (unit: m) Distance to check between URDF and PLY model for feature identification
+max_angle_pcd = cfg["max_angle_pcd"] # (unit: degrees) Angle that should be between normals of point cloud and line of sight
+num_feat = cfg["num_features"] # Number of features to extract per observation instance
 
 
 ########################################################################################################################
 # Set Camera view for GUI
-camera_distance = 8.46  # Distance from the camera to the target point
-camera_yaw = -50.0  # Yaw angle in degrees
-camera_pitch = -25.0  # Pitch angle in degrees
-camera_target_position = [-6.02, -3.66, 0.60]  # position that the camera is looking from
+camera_distance = cfg["camera_distance"]  # Distance from the camera to the target point
+camera_yaw = cfg["camera_yaw"]  # Yaw angle in degrees
+camera_pitch = cfg["camera_pitch"]  # Pitch angle in degrees
+camera_target_position = list(cfg["camera_target_position"])  # position that the camera is looking from
 p.resetDebugVisualizerCamera(camera_distance, camera_yaw, camera_pitch, camera_target_position)
 
 ########################################################################################################################
 # Lidar sensor parameters
-num_rays_theta = 20  # Number of rays in theta direction (horizontal)
-num_rays_phi = 20  # Number of rays in phi direction (vertical)
+num_rays_theta = cfg["num_rays_theta"]  # Number of rays in theta direction (horizontal)
+num_rays_phi = cfg["num_rays_phi"]  # Number of rays in phi direction (vertical)
 max_distance = Rdet  # The maximum distance of the raycast
-visualize_rays = False  # Whether or not to visualize the raycasts
-visualize_hits = False  # Whether or not to visualize the raycast hits
-visualize_fraction = 0.3  # Fraction of total rays to visualize
-lidar_fov = np.pi/2  # Field of view (FOV) of the Lidar in radians
+visualize_rays = cfg["visualize_rays"]  # Whether or not to visualize the raycasts
+visualize_hits = cfg["visualize_hits"]  # Whether or not to visualize the raycast hits
+visualize_fraction = cfg["visualize_fraction"]  # Fraction of total rays to visualize
+lidar_fov = cfg["lidar_fov"]  # Field of view (FOV) of the Lidar in radians
 
 ########################################################################################################################
 # Point Cloud Vizualisation Parameters
-viz_target_pcd = False # Vizualize Target pcd or not
-voxel = 1 # voxel size for downsampling of pcd for vizualization
-viz_agent_pcd = False # Vizualize the Landmark of agents
-ds = 3 # Downsample the landmarks to show by ds
+viz_target_pcd = cfg["viz_target_pcd"] # Vizualize Target pcd or not
+voxel = cfg["voxel"] # voxel size for downsampling of pcd for vizualization
+viz_agent_pcd = cfg["viz_agent_pcd"] # Vizualize the Landmark of agents
+ds = cfg["ds"] # Downsample the landmarks to show by ds
 
 ########################################################################################################################
 # Generate the target
@@ -109,13 +202,13 @@ ds = 3 # Downsample the landmarks to show by ds
 
 target_position = [0, 0, 0]
 target_orientation = p.getQuaternionFromEuler([0, 0, 0])
-texTar_id = p.loadTexture("/home/elghali/Desktop/SwarmCapture+/Targets/Texture_Target.jpg")
+texTar_id = p.loadTexture(paths["target_texture"])
 target_body_id, target_pcd, object_name = lt.load_target(target_position,target_orientation,texTar_id)
 
 Target_Point_Cloud_History = []
 
 # Create name tag
-dt = 1/240 # simulation time step
+dt = cfg["dt"] # simulation time step
 step = 1/dt
 tag = f'_N{N:.0f}_D{duration:.0f}_dt{step:.0f}'
 tag = tag+'_'+object_name
@@ -127,7 +220,7 @@ Target_Point_Cloud_History.append(np.array(target_pcd.points))
 # tar_vel, tar_angvel = [0.0, 0.0, 0.0], [-60.9, -1.2, -20.4] # Very Fast
 # tar_vel, tar_angvel = [0.0, 0.0, 0.0], [2.9, -1.2, -2.4] # Fast
 # tar_vel, tar_angvel = [0.0, 0.0, 0.0], [-0.03, 0.05, -0.1] # Faster than normal
-tar_vel, tar_angvel = [0.0, 0.0, 0.0], [0.005, -0.01, 0.01] # Very slow for large satellite
+tar_vel, tar_angvel = list(cfg["target_velocity"]), list(cfg["target_angular_velocity"]) # Very slow for large satellite
 # tar_vel, tar_angvel = [0, 0, 0], [0, 0, 0] # Fixed
 
 p.resetBaseVelocity(target_body_id, tar_vel, tar_angvel)
@@ -163,7 +256,7 @@ g0 = 9.81 # Earth's gravitational coefficient
 
 ########################################################################################################################
 # Create a agent's collision and visual shapes (same for all Agents_Bodies)
-obj_file = "/home/elghali/Desktop/SwarmCapture+/Cube_Blender/Cube.obj" # Cube is 20 cm x 20 cm x 20 cm (8U CubeSat)
+obj_file = paths["cube_obj"] # Cube is 20 cm x 20 cm x 20 cm (8U CubeSat)
 agent_visual_shape_id = p.createVisualShape(shapeType=p.GEOM_MESH,
                                       fileName=obj_file,
                                       visualFramePosition=[0, 0, 0],
@@ -173,7 +266,7 @@ agent_collision_shape_id = p.createCollisionShape(shapeType=p.GEOM_MESH,
                                             collisionFramePosition=[0, 0, 0],
                                             meshScale=[1, 1, 1])
 # Load the texture image
-texture_file = "/home/elghali/Desktop/SwarmCapture+/Cube_Blender/Texture_Cube.png"
+texture_file = paths["cube_texture"]
 TexCub_id = p.loadTexture(texture_file)
 
 #######################################################################################################################
@@ -305,7 +398,7 @@ for i in range(num_iter):
 
     # visualize every kappa seconds
     cond_viz = False
-    kappa = 0.1
+    kappa = cfg["viz_interval_seconds"]
     every = np.floor(kappa/dt)
     if i % every == 0: 
         cond_viz = True
@@ -593,7 +686,7 @@ for i in range(num_iter):
 
     # save every kappa seconds
     cond_save = False
-    kappa = 5
+    kappa = cfg["save_interval_seconds"]
     every = np.floor(kappa/dt)
     if i % every == 0: 
         cond_save = True
@@ -614,7 +707,7 @@ for i in range(num_iter):
         df = pd.DataFrame(data)
 
         # Save the DataFrame to an Excel file
-        output_file = "/home/elghali/Desktop/SwarmCapture+/Data/simulation_data"+tag+".xlsx"  # Specify the desired name of the output Excel file
+        output_file = os.path.join(paths["data_dir"], "simulation_data"+tag+".xlsx")  # Specify the desired name of the output Excel file
 
         # Create an ExcelWriter object
         with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
@@ -631,12 +724,12 @@ for i in range(num_iter):
         ########################################################################################################################
 
         print('\nSaving agents history pickle file...')
-        with open('/home/elghali/Desktop/SwarmCapture+/Data/Agents_History'+tag+'.pkl', 'wb') as file:
+        with open(os.path.join(paths["data_dir"], 'Agents_History'+tag+'.pkl'), 'wb') as file:
             pickle.dump(Agents_History, file)
         print('Saved successfully')
 
         print('\nSaving target history pickle file...')
-        with open('/home/elghali/Desktop/SwarmCapture+/Data/Target_History'+tag+'.pkl', 'wb') as file:
+        with open(os.path.join(paths["data_dir"], 'Target_History'+tag+'.pkl'), 'wb') as file:
             pickle.dump(Target_History, file)
         print('Saved successfully')
 
@@ -646,7 +739,7 @@ for i in range(num_iter):
         # print('Saved successfully')
 
         print('\nSaving attachment points history pickle file...')
-        with open('/home/elghali/Desktop/SwarmCapture+/Data/Attachment_Points'+tag+'.pkl', 'wb') as file:
+        with open(os.path.join(paths["data_dir"], 'Attachment_Points'+tag+'.pkl'), 'wb') as file:
             pickle.dump(attachment_points, file)
         print('Saved successfully')
 
@@ -754,7 +847,7 @@ pointing_reward = N * num_iter / pointing_error
 
 ##################################################################
 # w1, w2, w3, w4 = 1, 1, 1, 1
-w1, w2, w3, w4, w5 = 1, 1, 1000, 1, 10
+w1, w2, w3, w4, w5 = cfg["performance_weights"]
 
 performance = w1*dock_reward + w2*fuel_reward + w3*force_spike_reward + w4*contact_velocity_reward + w5 * pointing_reward
 
@@ -772,7 +865,7 @@ print(f'Total performance               : {performance}')
 
 
 # Write to a file
-with open("/home/elghali/Desktop/SwarmCapture+/performance.json", "w") as f:
+with open(paths["performance_file"], "w") as f:
     json.dump(performance, f)
 
 
@@ -810,7 +903,7 @@ data = {
 df = pd.DataFrame(data)
 
 # Save the DataFrame to an Excel file
-output_file = "/home/elghali/Desktop/SwarmCapture+/Data/simulation_data"+tag+".xlsx"  # Specify the desired name of the output Excel file
+output_file = os.path.join(paths["data_dir"], "simulation_data"+tag+".xlsx")  # Specify the desired name of the output Excel file
 
 # Create an ExcelWriter object
 with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
@@ -827,12 +920,12 @@ print('Excel Data saved')
 ########################################################################################################################
 
 print('\nSaving agents history pickle file...')
-with open('/home/elghali/Desktop/SwarmCapture+/Data/Agents_History'+tag+'.pkl', 'wb') as file:
+with open(os.path.join(paths["data_dir"], 'Agents_History'+tag+'.pkl'), 'wb') as file:
     pickle.dump(Agents_History, file)
 print('Saved successfully')
 
 print('\nSaving target history pickle file...')
-with open('/home/elghali/Desktop/SwarmCapture+/Data/Target_History'+tag+'.pkl', 'wb') as file:
+with open(os.path.join(paths["data_dir"], 'Target_History'+tag+'.pkl'), 'wb') as file:
     pickle.dump(Target_History, file)
 print('Saved successfully')
 
@@ -842,7 +935,7 @@ print('Saved successfully')
 # print('Saved successfully')
 
 print('\nSaving attachment points history pickle file...')
-with open('/home/elghali/Desktop/SwarmCapture+/Data/Attachment_Points'+tag+'.pkl', 'wb') as file:
+with open(os.path.join(paths["data_dir"], 'Attachment_Points'+tag+'.pkl'), 'wb') as file:
     pickle.dump(attachment_points, file)
 print('Saved successfully')
 
@@ -852,3 +945,33 @@ print(f'Check files with names ending in "{tag}"')
 print('\n')
 
 
+"""
+
+
+def _execute_script_body(config: SimulationConfig):
+    exec_globals = {
+        "__name__": "__main__",
+        "__file__": __file__,
+        "__package__": None,
+        "__cached__": None,
+        "__runtime_cfg": asdict(config),
+        "__resolved_paths": _resolve_simulation_paths(config),
+    }
+    exec_globals.update(globals())
+    exec(compile(SCRIPT_BODY, __file__, "exec"), exec_globals, exec_globals)
+    return exec_globals
+
+
+def run_simulation(config=None):
+    runtime_config = config if config is not None else build_default_simulation_config()
+    if not isinstance(runtime_config, SimulationConfig):
+        raise TypeError("run_simulation expects a SimulationConfig instance or None.")
+    return _execute_script_body(runtime_config)
+
+
+def main():
+    return run_simulation()
+
+
+if __name__ == "__main__":
+    main()

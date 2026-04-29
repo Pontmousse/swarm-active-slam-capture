@@ -9,6 +9,7 @@ import open3d as o3d
 from gtsam import symbol_shorthand
 import pickle
 import random
+from dataclasses import dataclass
 from helper import *
 from Custom_Factors import *
 from LandmarkRegistry import LandmarkRegistry
@@ -16,6 +17,165 @@ from Feature_Processing import compute_features, add_noise_to_features, get_desc
 from map_merging import store_scan_local, build_merged_map, compute_merged_map_error
 from notify_helper import notify
 import config
+
+
+@dataclass
+class DdfgoConfig:
+    config_module: object
+    object_name: str
+    dt: float
+    step_size: int
+    sw: int
+    max_land: int
+    unc: float
+    verbose: bool
+    verbose_map: bool
+    verbose_kinem: bool
+    update_sliding_window: bool
+    init_pose_only: bool
+    odom: bool
+    kinem: bool
+    decentralized: bool
+    qn: float
+    ql: float
+    fgo_param: float
+    low_pass_filter_coeff: float
+    use_legacy_random_sampling: bool
+    use_random_feature_fill: bool
+    voxel_size: float
+    icp_threshold: float
+    scan_downsample_voxel_size: float
+    map_mode: str
+    feature_noise_std: float
+    feature_id_namespace_policy: str
+    enable_outlier_rejection: bool
+    outlier_max_distance_from_com: float
+    outlier_max_stale_frames: int
+    calculate_w_method: str
+    use_window_anchor_prior: bool
+    window_anchor_stride: int
+    use_sparse_gps_prior: bool
+    gps_stride: int
+
+    @classmethod
+    def from_module(cls, config_module):
+        step_size = int(config_module.history_downsample_step)
+        if step_size <= 0:
+            step_size = 1
+        return cls(
+            config_module=config_module,
+            object_name=config_module.object_name,
+            dt=1 / config_module.DT,
+            step_size=step_size,
+            sw=config_module.sw,
+            max_land=config_module.Max_Land,
+            unc=config_module.unc,
+            verbose=config_module.Verbose,
+            verbose_map=config_module.Verbose_map,
+            verbose_kinem=config_module.Verbose_kinem,
+            update_sliding_window=config_module.Update_Sliding_Window,
+            init_pose_only=config_module.Init_Pose_Only,
+            odom=config_module.Odom,
+            kinem=config_module.Kinem,
+            decentralized=config_module.Decentralized,
+            qn=config_module.Qn,
+            ql=config_module.Ql,
+            fgo_param=config_module.FGO_Param,
+            low_pass_filter_coeff=config_module.low_pass_filter_coeff,
+            use_legacy_random_sampling=config_module.USE_LEGACY_RANDOM_SAMPLING,
+            use_random_feature_fill=config_module.USE_RANDOM_FEATURE_FILL,
+            voxel_size=config_module.voxel_size,
+            icp_threshold=config_module.icp_threshold,
+            scan_downsample_voxel_size=config_module.scan_downsample_voxel_size,
+            map_mode=config_module.map_mode,
+            feature_noise_std=config_module.feature_noise_std,
+            feature_id_namespace_policy=config_module.feature_id_namespace_policy,
+            enable_outlier_rejection=config_module.enable_outlier_rejection,
+            outlier_max_distance_from_com=config_module.outlier_max_distance_from_com,
+            outlier_max_stale_frames=config_module.outlier_max_stale_frames,
+            calculate_w_method=config_module.calculate_w_method,
+            use_window_anchor_prior=config_module.use_window_anchor_prior,
+            window_anchor_stride=max(1, int(config_module.window_anchor_stride)),
+            use_sparse_gps_prior=config_module.use_sparse_gps_prior,
+            gps_stride=max(1, int(config_module.gps_stride)),
+        )
+
+
+@dataclass
+class RuntimeDerived:
+    object_name: str
+    dt: float
+    step_size: int
+    sw: int
+    max_land: int
+    unc: float
+    verbose: bool
+    verbose_map: bool
+    verbose_kinem: bool
+    update_sliding_window: bool
+    init_pose_only: bool
+    odom: bool
+    kinem: bool
+    decentralized: bool
+    qn: float
+    ql: float
+    fgo_param: float
+    low_pass_filter_coeff: float
+    use_legacy_random_sampling: bool
+    use_random_feature_fill: bool
+    voxel_size: float
+    icp_threshold: float
+    scan_downsample_voxel_size: float
+    map_mode: str
+    feature_noise_std: float
+    feature_id_namespace_policy: str
+    enable_outlier_rejection: bool
+    outlier_max_distance_from_com: float
+    outlier_max_stale_frames: int
+    calculate_w_method: str
+    use_window_anchor_prior: bool
+    window_anchor_stride: int
+    use_sparse_gps_prior: bool
+    gps_stride: int
+
+
+def derive_runtime(cfg: DdfgoConfig) -> RuntimeDerived:
+    return RuntimeDerived(
+        object_name=cfg.object_name,
+        dt=cfg.dt,
+        step_size=cfg.step_size,
+        sw=cfg.sw,
+        max_land=cfg.max_land,
+        unc=cfg.unc,
+        verbose=cfg.verbose,
+        verbose_map=cfg.verbose_map,
+        verbose_kinem=cfg.verbose_kinem,
+        update_sliding_window=cfg.update_sliding_window,
+        init_pose_only=cfg.init_pose_only,
+        odom=cfg.odom,
+        kinem=cfg.kinem,
+        decentralized=cfg.decentralized,
+        qn=cfg.qn,
+        ql=cfg.ql,
+        fgo_param=cfg.fgo_param,
+        low_pass_filter_coeff=cfg.low_pass_filter_coeff,
+        use_legacy_random_sampling=cfg.use_legacy_random_sampling,
+        use_random_feature_fill=cfg.use_random_feature_fill,
+        voxel_size=cfg.voxel_size,
+        icp_threshold=cfg.icp_threshold,
+        scan_downsample_voxel_size=cfg.scan_downsample_voxel_size,
+        map_mode=cfg.map_mode,
+        feature_noise_std=cfg.feature_noise_std,
+        feature_id_namespace_policy=cfg.feature_id_namespace_policy,
+        enable_outlier_rejection=cfg.enable_outlier_rejection,
+        outlier_max_distance_from_com=cfg.outlier_max_distance_from_com,
+        outlier_max_stale_frames=cfg.outlier_max_stale_frames,
+        calculate_w_method=cfg.calculate_w_method,
+        use_window_anchor_prior=cfg.use_window_anchor_prior,
+        window_anchor_stride=cfg.window_anchor_stride,
+        use_sparse_gps_prior=cfg.use_sparse_gps_prior,
+        gps_stride=cfg.gps_stride,
+    )
 
 ###########################################################################################
 # Config-driven runtime controls
@@ -76,14 +236,54 @@ def load_pickle_file(path):
         return pickle.load(file)
 
 
-def save_pickle_files(agents_history, target_history):
-    results_paths = config.get_results_paths()
+def save_pickle_files(agents_history, target_history, config_module=config):
+    results_paths = config_module.get_results_paths()
     os.makedirs(os.path.dirname(results_paths["agents"]), exist_ok=True)
     with open(results_paths["agents"], "wb") as file:
         pickle.dump(agents_history, file)
     with open(results_paths["target"], "wb") as file:
         pickle.dump(target_history, file)
 
+
+SCRIPT_BODY = r"""
+
+config = __runtime_config_module
+runtime = __runtime_derived
+
+object_name = runtime["object_name"]
+dt = runtime["dt"]
+step_size = runtime["step_size"]
+sw = runtime["sw"]
+Max_Land = runtime["max_land"]
+unc = runtime["unc"]
+Verbose = runtime["verbose"]
+Verbose_map = runtime["verbose_map"]
+Verbose_kinem = runtime["verbose_kinem"]
+Update_Sliding_Window = runtime["update_sliding_window"]
+Init_Pose_Only = runtime["init_pose_only"]
+Odom = runtime["odom"]
+Kinem = runtime["kinem"]
+Decentralized = runtime["decentralized"]
+Qn = runtime["qn"]
+Ql = runtime["ql"]
+FGO_Param = runtime["fgo_param"]
+low_pass_filter_coeff = runtime["low_pass_filter_coeff"]
+USE_LEGACY_RANDOM_SAMPLING = runtime["use_legacy_random_sampling"]
+USE_RANDOM_FEATURE_FILL = runtime["use_random_feature_fill"]
+voxel_size = runtime["voxel_size"]
+icp_threshold = runtime["icp_threshold"]
+scan_downsample_voxel_size = runtime["scan_downsample_voxel_size"]
+map_mode = runtime["map_mode"]
+feature_noise_std = runtime["feature_noise_std"]
+feature_id_namespace_policy = runtime["feature_id_namespace_policy"]
+enable_outlier_rejection = runtime["enable_outlier_rejection"]
+outlier_max_distance_from_com = runtime["outlier_max_distance_from_com"]
+outlier_max_stale_frames = runtime["outlier_max_stale_frames"]
+use_window_anchor_prior = runtime["use_window_anchor_prior"]
+window_anchor_stride = runtime["window_anchor_stride"]
+use_sparse_gps_prior = runtime["use_sparse_gps_prior"]
+gps_stride = runtime["gps_stride"]
+calculate_w = calculate_w_methods.get(runtime["calculate_w_method"], calculate_w4)
 
 #############################################################################################
 # Load Simulation History
@@ -1117,7 +1317,7 @@ for i in range(1, num_iter):
     save_every = max(1, int((num_iter - 1) / max(1, config.save_num_chunks)))
     if i % save_every == 0:
         print('\nSaving files using Pickle...')
-        save_pickle_files(Agents_History, Target_History)
+        save_pickle_files(Agents_History, Target_History, config)
         print('Two pickle files saved')
         print(f'Check files with name tag: {tag} \n')
         if config.enable_notify:
@@ -1155,7 +1355,7 @@ print('\n')
 # Save using Pickle module for Plotting and Printing in a separate code
 ########################################################################################################################
 print('Saving files using Pickle...')
-save_pickle_files(Agents_History, Target_History)
+save_pickle_files(Agents_History, Target_History, config)
 
 print('\nTwo pickle files saved')
 if config.enable_notify:
@@ -1178,3 +1378,32 @@ print('\n')
 print('CODE COMPILED WITHOUT ERRORS')
 print(f'Check files with names ending in "{tag}"')
 print('\n')
+"""
+
+
+def _execute_script_body(cfg: DdfgoConfig):
+    runtime = derive_runtime(cfg)
+    exec_globals = {
+        "__name__": "__main__",
+        "__file__": __file__,
+        "__package__": None,
+        "__cached__": None,
+        "__runtime_config_module": cfg.config_module,
+        "__runtime_derived": runtime.__dict__,
+    }
+    exec_globals.update(globals())
+    exec(compile(SCRIPT_BODY, __file__, "exec"), exec_globals, exec_globals)
+    return exec_globals
+
+
+def run_batch_from_config(config_module=config):
+    cfg = DdfgoConfig.from_module(config_module)
+    return _execute_script_body(cfg=cfg)
+
+
+def main():
+    return run_batch_from_config()
+
+
+if __name__ == "__main__":
+    main()
