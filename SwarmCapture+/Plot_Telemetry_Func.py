@@ -2,12 +2,22 @@ import numpy as np
 import pickle
 import pybullet
 import Controllers as C
+from pathlib import Path
 
 dt = 1/240
 s = 1
 
 def load_variable_from_file(filename):
-    with open(filename, 'rb') as file:
+    path = Path(filename)
+    if not path.exists():
+        message = (
+            f"Missing data file: {path}\n"
+            "This plotting/animation script expects simulation outputs with the current shared tag.\n"
+            "Run the simulation first (run_active_slam.py or Swarm_Target_Capture+.py), "
+            "or update shared_config.py (N/D/DT/object_name) to match existing files."
+        )
+        raise FileNotFoundError(message)
+    with path.open("rb") as file:
         variable = pickle.load(file)
     return variable
 

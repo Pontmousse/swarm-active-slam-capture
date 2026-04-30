@@ -5,6 +5,13 @@ import Plot_Telemetry_Func as Telemetry
 import Load_Target as lt
 import pybullet as p
 import pybullet_data
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
 
 def merge_lists(list1, list2):
     # Combine the lists and convert to a set to remove duplicates
@@ -41,15 +48,20 @@ p.setAdditionalSearchPath(pybullet_data.getDataPath())
 p.setGravity(0, 0, 0)
 
 #############################################################################################
-object_name = 'Orion_Capsule' # Target selected
-dt_ = 240
-tag = 'N10_D3_dt'+str(dt_)
-tag = tag+'_'+object_name
+object_name = shared_config.object_name
+dt_ = shared_config.DT
+paths = shared_config.get_sim_data_paths(
+    n=shared_config.N,
+    d=shared_config.D,
+    dt=dt_,
+    name=object_name,
+)
+tag = paths["tag"]
 
 #############################################################################################
 
-path_agents = 'Data/Agents_History_'+tag+'.pkl'
-path_target = 'Data/Target_History_'+tag+'.pkl'
+path_agents = paths["agents"]
+path_target = paths["target"]
 
 # Load Simulation History
 Agents_History = Telemetry.load_variable_from_file(path_agents)

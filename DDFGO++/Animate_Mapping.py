@@ -105,19 +105,19 @@ def _spheres_from_points(points, radius, resolution):
     return out
 
 def load_agent_pcd(id,i):
-    Landm = []
     Agents = Agents_History[i]
     Spacecraft = Agents[id-1]
-    Landm = Spacecraft['FeatureSet']
+    Landm = Spacecraft.get('FeatureSet', np.array([]).reshape(0, 3))
+    Landm = _to_points_array(Landm)
     agent_pcd = o3d.geometry.PointCloud()
     agent_pcd.points = o3d.utility.Vector3dVector(Landm)
     return agent_pcd
 
 def load_agent_map(id,i):
-    Landm = []
     Agents = Agents_History[i]
     Spacecraft = Agents[id-1]
-    Landm = Spacecraft['MapSet']
+    Landm = Spacecraft.get('MapSet', np.array([]).reshape(0, 3))
+    Landm = _to_points_array(Landm)
     agent_map = o3d.geometry.PointCloud()
     agent_map.points = o3d.utility.Vector3dVector(Landm)
     return agent_map
@@ -280,7 +280,11 @@ agent_merged_map.paint_uniform_color([0.55, 0.55, 0.85])  # subdued violet
 # load initial agents cubes
 Agent_Geometries = []
 for a in range(N):
-    agent_box = o3d.geometry.TriangleMesh.create_box(width=1, height=1, depth=1)
+    agent_box = o3d.geometry.TriangleMesh.create_box(
+        width=float(config.animation_cubesat_size_m),
+        height=float(config.animation_cubesat_size_m),
+        depth=float(config.animation_cubesat_size_m),
+    )
     agent_box.compute_vertex_normals()
 
     if a == (id-1):

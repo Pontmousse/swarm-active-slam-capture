@@ -6,22 +6,27 @@ import Plot_Telemetry_Func as Telemetry
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 import pybullet as p
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
 
 #############################################################################################
 #############################################################################################
-DT = 240
+DT = shared_config.DT
 dt = 1/DT # time step
-N = 7 # Number of Agents_Bodies
-D = 15 # Simulation duration
-object_name = 'Motor' # Target selected
+N = shared_config.N # Number of Agents_Bodies
+D = shared_config.D # Simulation duration
+object_name = shared_config.object_name # Target selected
 #############################################################################################
 
-tag = 'N'+str(N)+'_D'+str(D)+'_dt'+str(DT)
-tag = tag+'_'+object_name
-
-
-path_agents = 'Data/Agents_History_'+tag+'.pkl'
-path_target = 'Data/Target_History_'+tag+'.pkl'
+paths = shared_config.get_sim_data_paths(n=N, d=D, dt=DT, name=object_name)
+tag = paths["tag"]
+path_agents = paths["agents"]
+path_target = paths["target"]
 Agents_History = Telemetry.load_variable_from_file(path_agents)
 Target_History = Telemetry.load_variable_from_file(path_target)
 

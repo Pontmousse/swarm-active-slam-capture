@@ -5,6 +5,7 @@ All runtime controls should be defined here and consumed by SwarmDDFGO++.py.
 
 from pathlib import Path
 import os
+import sys
 import numpy as np
 
 #############################################################################################
@@ -14,14 +15,17 @@ MODULE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = MODULE_DIR.parent
 DATA_DIR = PROJECT_ROOT / "Data" / "Dynamic_Target"
 RESULTS_DIR = MODULE_DIR / "Results"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
 
 #############################################################################################
 # Simulation Parameters
 #############################################################################################
-DT = 240
-N = 2
-D = 5
-object_name = "Motor"
+DT = shared_config.DT
+N = shared_config.N
+D = shared_config.D
+object_name = shared_config.object_name
 
 #############################################################################################
 # Runtime / Mode Controls (multi-agent + SLAM)
@@ -87,6 +91,7 @@ animation_show_sparse_map = True
 animation_show_dense_map = True
 animation_show_observations = False
 animation_show_target_truth = True
+animation_cubesat_size_m = float(shared_config.VIS_CUBESAT_SIZE_M)
 
 #############################################################################
 # SLAM optimization controls
@@ -179,8 +184,7 @@ if run_profile == "smoke":
 # Helper Functions
 #############################################################################################
 def get_tag():
-    tag = f"N{N}_D{D}_dt{DT}_{object_name}"
-    return tag
+    return shared_config.get_tag(n=N, d=D, dt=DT, name=object_name)
 
 
 def get_dec_tag():
@@ -194,12 +198,7 @@ def get_results_tag():
 
 
 def get_data_paths():
-    tag = get_tag()
-    return {
-        "agents": str(DATA_DIR / f"Agents_History_{tag}.pkl"),
-        "target": str(DATA_DIR / f"Target_History_{tag}.pkl"),
-        "target_pcd": str(DATA_DIR / f"Target_PointCloud_{tag}.pkl"),
-    }
+    return shared_config.get_sim_data_paths(n=N, d=D, dt=DT, name=object_name)
 
 
 def get_results_paths():

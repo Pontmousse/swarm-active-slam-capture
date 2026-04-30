@@ -5,13 +5,21 @@ from mpl_toolkits.mplot3d import Axes3D
 import Plot_Telemetry_Func as Telemetry
 import trimesh
 import pyvista as pv
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
 
 # Object Selection
-object_name = 'Motor'
+object_name = shared_config.object_name
 
 # Load Simulation History
-Agents_History = Telemetry.load_variable_from_file('Data/Agents_History_N7_D15_dt240_Motor.pkl')
-dt = 1/240  # time step
+paths = shared_config.get_sim_data_paths()
+Agents_History = Telemetry.load_variable_from_file(paths["agents"])
+dt = 1 / shared_config.DT  # time step
 N = len(Agents_History[0])  # Number of agents
 num_iter = len(Agents_History)
 

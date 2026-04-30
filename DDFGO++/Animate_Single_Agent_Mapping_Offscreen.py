@@ -98,7 +98,8 @@ def _spheres_from_points(points, radius, resolution):
 def load_agent_pcd(id,i):
     Agents = Agents_History[i]
     Spacecraft = Agents[id-1]
-    Feat = Spacecraft['FeatureSet']
+    Feat = Spacecraft.get('FeatureSet', np.array([]).reshape(0, 3))
+    Feat = _to_points_array(Feat)
     agent_pcd = o3d.geometry.PointCloud()
     agent_pcd.points = o3d.utility.Vector3dVector(Feat)
     return agent_pcd
@@ -106,8 +107,11 @@ def load_agent_pcd(id,i):
 def load_agent_map(id,i):
     Agents = Agents_History[i]
     Spacecraft = Agents[id-1]
-    Map = Spacecraft['MapSet']
-    MapNgh = Spacecraft['MapNghSet']
+    Map = _to_points_array(Spacecraft.get('MapSet', np.array([]).reshape(0, 3)))
+    MapNgh = np.asarray(Spacecraft.get('MapNghSet', [])).reshape(-1)
+
+    if len(MapNgh) != len(Map):
+        MapNgh = np.full(len(Map), id, dtype=int)
 
     indices2remove = []
     for i in range(len(MapNgh)):
@@ -124,8 +128,11 @@ def load_agent_neighbour_map(id,i):
     Agents = Agents_History[i]
     Spacecraft = Agents[id-1]
 
-    MapNgh = Spacecraft['MapNghSet']
-    Map = Spacecraft['MapSet']
+    MapNgh = np.asarray(Spacecraft.get('MapNghSet', [])).reshape(-1)
+    Map = _to_points_array(Spacecraft.get('MapSet', np.array([]).reshape(0, 3)))
+
+    if len(MapNgh) != len(Map):
+        MapNgh = np.full(len(Map), id, dtype=int)
 
     Points = []
     for i in range(len(MapNgh)):
@@ -160,7 +167,8 @@ Target_Point_Cloud_History = Telemetry.load_variable_from_file(path_target_pcd)
 target_pcd.points = o3d.utility.Vector3dVector(Target_Point_Cloud_History[0])
 target_pcd.paint_uniform_color([0.9, 0.9, 0.9])
 search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-target_pcd.estimate_normals(search_param)
+if len(target_pcd.points) > 0:
+    target_pcd.estimate_normals(search_param)
 
 # downsample target pcd as needed
 if config.animation_target_voxel_size and config.animation_target_voxel_size > 0:
@@ -190,7 +198,11 @@ agent_merged_map = load_agent_merged_map(id, 0)
 # load initial agents cubes
 Agent_Geometries = []
 for a in range(N):
-    agent_box = o3d.geometry.TriangleMesh.create_box(width=0.2, height=0.2, depth=0.2)
+    agent_box = o3d.geometry.TriangleMesh.create_box(
+        width=float(config.animation_cubesat_size_m),
+        height=float(config.animation_cubesat_size_m),
+        depth=float(config.animation_cubesat_size_m),
+    )
     agent_box.compute_vertex_normals()
 
     if a == (id-1):

@@ -20,6 +20,12 @@ import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
 
 
 @dataclass
@@ -39,8 +45,8 @@ class SimulationConfig:
     normal_bid_weight: float = 1
     max_force: float = 2
     max_torque: float = 0.5
-    num_agents: int = 6
-    duration_seconds: float = 150
+    num_agents: int = shared_config.N
+    duration_seconds: float = shared_config.D
     cancel_chw: bool = False
     altitude_km: float = 500
     low_pass_filter_coeff_state: float = 0.1
@@ -69,7 +75,7 @@ class SimulationConfig:
     voxel: int = 1
     viz_agent_pcd: bool = False
     ds: int = 3
-    dt: float = 1 / 240
+    dt: float = 1 / shared_config.DT
     target_velocity: tuple = (0.0, 0.0, 0.0)
     target_angular_velocity: tuple = (0.005, -0.01, 0.01)
     viz_interval_seconds: float = 0.1
@@ -406,7 +412,7 @@ def _initialize_simulation_body(sim_state):
     _capture_sim_globals(sim_state)
 
 
-def _step_simulation_body(sim_state):
+def begin_simulation_step(sim_state):
     global Agents, DockPose, Landm, Lc, Lcd, Spacecraft, a, age_rot, agent_body_id, angvel, ap, avg_time_per_iteration
     global body_id, chw_force, cond_save, cond_viz, constraint, contact_point, control_force, data, df, dis, dq, elapsed_time
     global estimated_time_left, estimated_time_left_str, every, file, force, force_thrust, iterations_left, k, kappa, mode, mode_prev, neighbour_weight
@@ -433,225 +439,231 @@ def _step_simulation_body(sim_state):
     if i % every == 0: 
         cond_viz = True
 
-    # Start loop over agents
-    for a in range(N):
-
-        ######################################### Extract Data from Previous Iteration for Feedback
-        # Extract Agents data
-        Agents = Agents_History[i]
-        r = rand_ord[a]
-        Spacecraft = Agents[r]
-        agent_body_id = Agents_Bodies[r]
+    _capture_sim_globals(sim_state)
 
 
-        ########## Scan Lidar
-        ray_results = rcl.lidar_sensor(agent_body_id, [-0.25,0,0], num_rays_theta, num_rays_phi, max_distance, 
-                visualize_rays, visualize_hits, visualize_fraction, cond_viz, lidar_fov)
-    
-    
-        # Landm, Lc = ot.Landmarks_Detected(target_pcd, Spacecraft['State'][:3], Rdet)
-        Landm, Lc = ot.Set_Landmarks_Detected(ray_results)
-        Spacecraft["LandSet"] = Landm
-        Spacecraft["LC"] = Lc
+def begin_agent_step(sim_state, agent_order_index):
+    global Agents, Spacecraft, a, agent_body_id, r
+    _restore_sim_globals(sim_state)
 
-        # Indices = ot.Set_Features_Indices_Using_KDTree(Landm, target_pcd, target_kdtree, Spacecraft["State"], max_lidar_pcd, max_angle_pcd, Rflk*1.1)
-        # Spacecraft["FeatureIdxSet"] = ot.downsample_features(Indices, num_feat)
-        # Spacecraft["FeatureSet"] = ot.Observe_Features_from_Indices(target_pcd, Spacecraft["FeatureIdxSet"], std)
+    a = agent_order_index
+    Agents = Agents_History[i]
+    r = rand_ord[a]
+    Spacecraft = Agents[r]
+    agent_body_id = Agents_Bodies[r]
+
+    _capture_sim_globals(sim_state)
 
 
-        if viz_agent_pcd and cond_viz:
-            num = len(Landm) // ds
-            Landm = random.sample(Landm, num)
-            for q in range(len(Landm)):
-                point = Landm[q]
-                p.addUserDebugText(".", point, textColorRGB=[0, 0.2, 0.9], textSize=2)
+def run_perception_phase(sim_state):
+    global Landm, Lc, Spacecraft, num, point, q, ray_results
+    _restore_sim_globals(sim_state)
 
-    
+    ray_results = rcl.lidar_sensor(agent_body_id, [-0.25,0,0], num_rays_theta, num_rays_phi, max_distance,
+            visualize_rays, visualize_hits, visualize_fraction, cond_viz, lidar_fov)
+
+    # Landm, Lc = ot.Landmarks_Detected(target_pcd, Spacecraft['State'][:3], Rdet)
+    Landm, Lc = ot.Set_Landmarks_Detected(ray_results)
+    Spacecraft["LandSet"] = Landm
+    Spacecraft["LC"] = Lc
+
+    # Indices = ot.Set_Features_Indices_Using_KDTree(Landm, target_pcd, target_kdtree, Spacecraft["State"], max_lidar_pcd, max_angle_pcd, Rflk*1.1)
+    # Spacecraft["FeatureIdxSet"] = ot.downsample_features(Indices, num_feat)
+    # Spacecraft["FeatureSet"] = ot.Observe_Features_from_Indices(target_pcd, Spacecraft["FeatureIdxSet"], std)
+
+    if viz_agent_pcd and cond_viz:
+        num = len(Landm) // ds
+        Landm = random.sample(Landm, num)
+        for q in range(len(Landm)):
+            point = Landm[q]
+            p.addUserDebugText(".", point, textColorRGB=[0, 0.2, 0.9], textSize=2)
+
+    _capture_sim_globals(sim_state)
 
 
-        ######################################### Communicate with neighboring agents
-        Lcd, Lc = nb.Set_Landmark_Centroid_Direction2(Spacecraft, Agents)
-        Spacecraft["LCD"] = Lcd
-        Spacecraft["LC"] = Lc
-        # DebugLine Landmark Centroid Direction
-        # nb.plot_LCD(Spacecraft)
-        # print(Spacecraft["LC"])
-    
+def run_communication_phase(sim_state):
+    global Lc, Lcd, Spacecraft, dis, k, ngh_action_time, neighbour_weight, querried_agent
+    _restore_sim_globals(sim_state)
 
-        ######################################### Perceive local environment
-        ########## Scan for neighbors
-        Spacecraft["CommSet"] = nb.Set_Neighborhood(Spacecraft, Agents, Rcom)
-        Spacecraft["CollSet"] = nb.Set_Neighborhood(Spacecraft, Agents, Rcol)
-        Spacecraft["AntFlkSet"] = nb.Set_Neighborhood(Spacecraft, Agents, Rant)
+    Lcd, Lc = nb.Set_Landmark_Centroid_Direction2(Spacecraft, Agents)
+    Spacecraft["LCD"] = Lcd
+    Spacecraft["LC"] = Lc
+    # DebugLine Landmark Centroid Direction
+    # nb.plot_LCD(Spacecraft)
+    # print(Spacecraft["LC"])
 
-    
-        # Scan for Auction-Consensus        
-        Spacecraft['APs'] = ot.Set_Attachment_Points_Detected(attachment_points, i,
-                                                              Spacecraft['State'][:3],
-                                                              Spacecraft['LCD'],
-                                                              Rdet_ap)
+    Spacecraft["CommSet"] = nb.Set_Neighborhood(Spacecraft, Agents, Rcom)
+    Spacecraft["CollSet"] = nb.Set_Neighborhood(Spacecraft, Agents, Rcol)
+    Spacecraft["AntFlkSet"] = nb.Set_Neighborhood(Spacecraft, Agents, Rant)
 
-        Spacecraft['APs_Bids'] = ss.calculate_bid(Spacecraft, attachment_points, i, sim_params)
+    # Scan for Auction-Consensus
+    Spacecraft['APs'] = ot.Set_Attachment_Points_Detected(attachment_points, i,
+                                                          Spacecraft['State'][:3],
+                                                          Spacecraft['LCD'],
+                                                          Rdet_ap)
 
-        # Select Neighbour to querry through network
-        if N > 1:
-            querried_agent = random.choice([k for k in range(N) if k != r])
-        else:
-            querried_agent = None
+    Spacecraft['APs_Bids'] = ss.calculate_bid(Spacecraft, attachment_points, i, sim_params)
 
-        # Calculate readiness signal
-        if len(Spacecraft['LC']) != 0:
-            dis = np.linalg.norm(np.array(Spacecraft['State'][:3]) - np.array(Spacecraft['LC']))
-            if N > 1 and dis < Rflk*1.5:
-                neighbour_weight = 0.5/(N*duration)
-                ngh_action_time = Agents_History[i][querried_agent]['ActionTime']
-                Spacecraft["ActionTime"] += neighbour_weight * (ngh_action_time - Spacecraft['ActionTime'])
+    # Select Neighbour to querry through network
+    if N > 1:
+        querried_agent = random.choice([k for k in range(N) if k != r])
+    else:
+        querried_agent = None
 
-        ######################################### Check and Switch Mode and put constraint if necessary for docking mode
-        mode_prev = Spacecraft["Mode"]
-        if i > 1:
-            mode, constraint, DockPose, contact_point = ss.Check_Mode_Switch(Spacecraft, Agents_History[i-1][r], agent_body_id, target_body_id, Rflk)
-            Spacecraft['DockConstraint'] = constraint
-            Spacecraft["Mode"] = mode
-            Spacecraft["DockPose"] = DockPose
-            if contact_point != (None, None, None):
-                Spacecraft["DockContactPoint"] = np.array(contact_point) - Spacecraft['State'][:3]
-    
-        if mode_prev == 'c' and mode == 'd':
-            Spacecraft["DockTime"] = i
-    
-        #########################################
-        # Calculate Attitude Lock Reference Frame
-        if Spacecraft["Mode"] == 'e':
-            Spacecraft["Control_Frame"] = nb.Set_LCD_Frame(Spacecraft)
-        elif Spacecraft["Mode"] == 'c':
-            Spacecraft["Control_Frame"] = nb.Set_Target_dir_Frame(Spacecraft, attachment_points)
-        
-        
-        # Debug        
-        # if len(Spacecraft["Control_Frame"]) != 0:
-            #DDebug
-            # print('\n')
-            # print(f'LCD_Frame:{Spacecraft["Control_Frame"]}')
-            # print(f'LCD_Frame"][:,0]:{Spacecraft["Control_Frame"][:,0]}')
-            # print(f'LCD_Frame"][0]{Spacecraft["Control_Frame"][0]}')
-            # print(f'LCD_Frame"][:,1]{Spacecraft["Control_Frame"][:,1]}')
-            # print(f'LCD_Frame"][1]{Spacecraft["Control_Frame"][1]}')
+    # Calculate readiness signal
+    if len(Spacecraft['LC']) != 0:
+        dis = np.linalg.norm(np.array(Spacecraft['State'][:3]) - np.array(Spacecraft['LC']))
+        if N > 1 and dis < Rflk*1.5:
+            neighbour_weight = 0.5/(N*duration)
+            ngh_action_time = Agents_History[i][querried_agent]['ActionTime']
+            Spacecraft["ActionTime"] += neighbour_weight * (ngh_action_time - Spacecraft['ActionTime'])
 
-            # Q = C.matrix_to_quaternion(Spacecraft["Control_Frame"])
-            # position = Spacecraft["State"][0:3]
-            # C.plot_ort_quat(position,Q,0)
-            # C.plot_ort_rot(position,Spacecraft["Control_Frame"],0.4)
+    _capture_sim_globals(sim_state)
 
-    
-    
-        ######################################### Store and Save
-        Spacecraft["TimeStep"] += dt
-        Spacecraft['Iteration'] += 1
-        Agents[r] = Spacecraft
 
-        ########################################## Calculate Control Force and Torque
-        u, tar = ss.Spacecraft_OBC(Spacecraft,
-                                   attachment_points, i,
-                                   Agents, cond_viz,
-                                   querried_agent, sim_params)
-        Spacecraft['Target'] = tar
-    
+def run_decision_phase(sim_state, slam_feedback=None):
+    global DockPose, Spacecraft, contact_point, constraint, mode, mode_prev
+    _ = slam_feedback
+    _restore_sim_globals(sim_state)
 
-        if Spacecraft["Mode"] != 'd':
-            # force/torque history update
-            control_force = u[0:3]
-            Spacecraft['Control_Force'] = control_force
-            # Debug forces
-            # print('\n')
-            # print(f'Control forces         : {control_force}')
-            if i == 0:
-                control_force = ss.saturate(control_force, max_frc)
-                Spacecraft['Smooth_Control_Force'] = control_force
-            else:
-                if Spacecraft["Mode"] == "e":
-                    control_force = C.smooth_force(Spacecraft, Agents_History[i-1][r], low_pass_filter_coeff_control)
-        
+    mode_prev = Spacecraft["Mode"]
+    if i > 1:
+        mode, constraint, DockPose, contact_point = ss.Check_Mode_Switch(Spacecraft, Agents_History[i-1][r], agent_body_id, target_body_id, Rflk)
+        Spacecraft['DockConstraint'] = constraint
+        Spacecraft["Mode"] = mode
+        Spacecraft["DockPose"] = DockPose
+        if contact_point != (None, None, None):
+            Spacecraft["DockContactPoint"] = np.array(contact_point) - Spacecraft['State'][:3]
+
+    if mode_prev == 'c' and mode == 'd':
+        Spacecraft["DockTime"] = i
+
+    # Calculate Attitude Lock Reference Frame
+    if Spacecraft["Mode"] == 'e':
+        Spacecraft["Control_Frame"] = nb.Set_LCD_Frame(Spacecraft)
+    elif Spacecraft["Mode"] == 'c':
+        Spacecraft["Control_Frame"] = nb.Set_Target_dir_Frame(Spacecraft, attachment_points)
+
+    ######################################### Store and Save
+    Spacecraft["TimeStep"] += dt
+    Spacecraft['Iteration'] += 1
+    Agents[r] = Spacecraft
+
+    _capture_sim_globals(sim_state)
+
+
+def run_control_phase(sim_state, agents_commands=None):
+    global DockPose, Spacecraft, age_rot, chw_force, control_force, force, force_thrust, pos, quat, rel_pos, rel_rot
+    global tar, tar_angvel, tar_pos, tar_quat, tar_rot, tar_vel, torque, torque_thrust, u, vel
+    _ = agents_commands
+    _restore_sim_globals(sim_state)
+
+    u, tar = ss.Spacecraft_OBC(Spacecraft,
+                               attachment_points, i,
+                               Agents, cond_viz,
+                               querried_agent, sim_params)
+    Spacecraft['Target'] = tar
+
+    if Spacecraft["Mode"] != 'd':
+        # force/torque history update
+        control_force = u[0:3]
+        Spacecraft['Control_Force'] = control_force
+        # Debug forces
+        # print('\n')
+        # print(f'Control forces         : {control_force}')
+        if i == 0:
             control_force = ss.saturate(control_force, max_frc)
             Spacecraft['Smooth_Control_Force'] = control_force
-        
-            # chw force
-            chw_force = C.chw_force(Spacecraft, altitude, cancel_chw)
-            Spacecraft['CHW_Force'] = chw_force
-            force = control_force + chw_force
-        
-            # Debug forces
-            # print(f'Smoothed Control forces: {control_force}')
-        
-        
-            # torque
-            torque = u[3:7] # no disturbances
-            Spacecraft['Control_Torque'] = torque
-            if i == 0:
-                torque = ss.saturate(torque, max_trq)
-                Spacecraft['Smooth_Control_Torque'] = torque
-            else:
-                if Spacecraft["Mode"] == "e":
-                    torque = C.smooth_torque(Spacecraft, Agents_History[i-1][r], low_pass_filter_coeff_control)
+        else:
+            if Spacecraft["Mode"] == "e":
+                control_force = C.smooth_force(Spacecraft, Agents_History[i-1][r], low_pass_filter_coeff_control)
+
+        control_force = ss.saturate(control_force, max_frc)
+        Spacecraft['Smooth_Control_Force'] = control_force
+
+        # chw force
+        chw_force = C.chw_force(Spacecraft, altitude, cancel_chw)
+        Spacecraft['CHW_Force'] = chw_force
+        force = control_force + chw_force
+
+        # Debug forces
+        # print(f'Smoothed Control forces: {control_force}')
+
+        # torque
+        torque = u[3:7] # no disturbances
+        Spacecraft['Control_Torque'] = torque
+        if i == 0:
             torque = ss.saturate(torque, max_trq)
             Spacecraft['Smooth_Control_Torque'] = torque
-        
-            # apply force / torque to body
-            p.applyExternalForce(agent_body_id, -1, force, Spacecraft["State"][0:3], p.WORLD_FRAME)
-            p.applyExternalTorque(agent_body_id, -1, torque, p.WORLD_FRAME)
-        
-        
-        
-        
         else:
-            DockPose = Spacecraft["DockPose"]
-        
-            # force/torque history update
-            control_force = u[0:3]
-            Spacecraft['Control_Force'] = control_force
-            Spacecraft['Smooth_Control_Force'] = control_force
-            chw_force = C.chw_force(Spacecraft, altitude, cancel_chw)
-            Spacecraft['CHW_Force'] = chw_force
-            torque = u[3:7] # no disturbances
-            Spacecraft['Control_Torque'] = torque
-            Spacecraft['Smooth_Control_Torque'] = torque
-        
+            if Spacecraft["Mode"] == "e":
+                torque = C.smooth_torque(Spacecraft, Agents_History[i-1][r], low_pass_filter_coeff_control)
+        torque = ss.saturate(torque, max_trq)
+        Spacecraft['Smooth_Control_Torque'] = torque
 
-            # Position Update
-            tar_pos, tar_quat = p.getBasePositionAndOrientation(target_body_id)
-            tar_rot = np.array(p.getMatrixFromQuaternion(tar_quat)).reshape(3, 3).T
-            rel_pos = np.dot(tar_rot.T, DockPose[:3])
-            pos  = np.array(tar_pos) + rel_pos
+        # apply force / torque to body
+        p.applyExternalForce(agent_body_id, -1, force, Spacecraft["State"][0:3], p.WORLD_FRAME)
+        p.applyExternalTorque(agent_body_id, -1, torque, p.WORLD_FRAME)
 
-            # Orientation Update
-            age_rot = np.array(p.getMatrixFromQuaternion(DockPose[3:7])).reshape(3, 3)
-            rel_rot = np.dot(tar_rot.T, age_rot)
-            quat = C.matrix_to_quaternion(rel_rot)
+    else:
+        DockPose = Spacecraft["DockPose"]
 
-            # Linear Velocity Update
-            tar_vel, tar_angvel = p.getBaseVelocity(target_body_id)
-            vel = tar_vel + np.cross(tar_angvel, rel_pos)
+        # force/torque history update
+        control_force = u[0:3]
+        Spacecraft['Control_Force'] = control_force
+        Spacecraft['Smooth_Control_Force'] = control_force
+        chw_force = C.chw_force(Spacecraft, altitude, cancel_chw)
+        Spacecraft['CHW_Force'] = chw_force
+        torque = u[3:7] # no disturbances
+        Spacecraft['Control_Torque'] = torque
+        Spacecraft['Smooth_Control_Torque'] = torque
 
-            # Reset Pose
-            p.resetBasePositionAndOrientation(agent_body_id, pos, quat)
-            p.resetBaseVelocity(agent_body_id, vel, tar_angvel)
-    
-    
-        # Calculate Fuel Consumption
-        force_thrust = np.linalg.norm(Spacecraft['Smooth_Control_Force'])*dt/(thruster_Isp*g0)
-        torque_thrust = np.linalg.norm(Spacecraft['Smooth_Control_Torque'])*dt/(thruster_Isp*g0*(agent_size/2))
-        Spacecraft["Fuel_Consumed"] += force_thrust + torque_thrust
-    
-        # save after maneuver
-        Agents[r] = Spacecraft 
-    
-    
+        # Position Update
+        tar_pos, tar_quat = p.getBasePositionAndOrientation(target_body_id)
+        tar_rot = np.array(p.getMatrixFromQuaternion(tar_quat)).reshape(3, 3).T
+        rel_pos = np.dot(tar_rot.T, DockPose[:3])
+        pos  = np.array(tar_pos) + rel_pos
+
+        # Orientation Update
+        age_rot = np.array(p.getMatrixFromQuaternion(DockPose[3:7])).reshape(3, 3)
+        rel_rot = np.dot(tar_rot.T, age_rot)
+        quat = C.matrix_to_quaternion(rel_rot)
+
+        # Linear Velocity Update
+        tar_vel, tar_angvel = p.getBaseVelocity(target_body_id)
+        vel = tar_vel + np.cross(tar_angvel, rel_pos)
+
+        # Reset Pose
+        p.resetBasePositionAndOrientation(agent_body_id, pos, quat)
+        p.resetBaseVelocity(agent_body_id, vel, tar_angvel)
+
+    # Calculate Fuel Consumption
+    force_thrust = np.linalg.norm(Spacecraft['Smooth_Control_Force'])*dt/(thruster_Isp*g0)
+    torque_thrust = np.linalg.norm(Spacecraft['Smooth_Control_Torque'])*dt/(thruster_Isp*g0*(agent_size/2))
+    Spacecraft["Fuel_Consumed"] += force_thrust + torque_thrust
+
+    # save after maneuver
+    Agents[r] = Spacecraft
+
+    _capture_sim_globals(sim_state)
+
+
+def run_physics_phase(sim_state):
+    _restore_sim_globals(sim_state)
 
     p.stepSimulation()
 
     p.addUserDebugText(f"Time step: {i*dt}/{duration}", [5, 5, 10], textSize = 1)  # display the time step
     time.sleep(dt/10)
 
+    _capture_sim_globals(sim_state)
+
+
+def record_simulation_frame(sim_state):
+    global Agents, Spacecraft, a, agent_body_id, angvel, avg_time_per_iteration, body_id, cond_save, data, df, dq
+    global elapsed_time, estimated_time_left, estimated_time_left_str, every, file, iterations_left, kappa, orientation
+    global output_file, pos, position, quat, r, step, target_state, vel, writer
+    _restore_sim_globals(sim_state)
 
     ############################################### Save History
     #################### Save Agents
@@ -784,6 +796,43 @@ def _step_simulation_body(sim_state):
     #########################################################################################################################
 
     _capture_sim_globals(sim_state)
+
+
+def run_simulation_step_phases(sim_state, agents_commands=None, slam_feedback=None):
+    begin_simulation_step(sim_state)
+    for agent_order_index in range(sim_state["N"]):
+        begin_agent_step(sim_state, agent_order_index)
+        run_perception_phase(sim_state)
+        run_communication_phase(sim_state)
+        run_decision_phase(sim_state, slam_feedback=slam_feedback)
+        run_control_phase(sim_state, agents_commands=agents_commands)
+    run_physics_phase(sim_state)
+    record_simulation_frame(sim_state)
+
+
+def _step_simulation_body(sim_state, agents_commands=None, slam_feedback=None):
+    run_simulation_step_phases(
+        sim_state,
+        agents_commands=agents_commands,
+        slam_feedback=slam_feedback,
+    )
+
+
+def build_simulation_frame(sim_state, iteration):
+    latest_agents = sim_state["Agents_History"][-1]
+    return {
+        "iteration": iteration,
+        "sim_time": iteration * sim_state["dt"],
+        "dt": sim_state["dt"],
+        "done": sim_state["current_iteration"] >= sim_state["num_iter"],
+        "agents_true_state": [copy.deepcopy(agent["State"]) for agent in latest_agents],
+        "target_true_state": copy.deepcopy(sim_state["Target_History"][-1]),
+        "agent_observations": [copy.deepcopy(agent.get("LandSet", [])) for agent in latest_agents],
+        "communication_sets": [copy.deepcopy(agent.get("CommSet", [])) for agent in latest_agents],
+        "target_point_cloud": copy.deepcopy(sim_state["Target_Point_Cloud_History"][-1]),
+    }
+
+
 def initialize_simulation(config=None):
     runtime_config = config if config is not None else build_default_simulation_config()
     if not isinstance(runtime_config, SimulationConfig):
@@ -797,8 +846,7 @@ def initialize_simulation(config=None):
     sim_state["performance"] = None
     return sim_state
 
-def step_simulation(sim_state, agents_commands=None):
-    _ = agents_commands
+def step_simulation(sim_state, agents_commands=None, slam_feedback=None):
     i = sim_state["current_iteration"]
     if i >= sim_state["num_iter"]:
         return {
@@ -810,24 +858,16 @@ def step_simulation(sim_state, agents_commands=None):
             "target_true_state": [],
             "agent_observations": [],
             "communication_sets": [],
+            "target_point_cloud": [],
         }
     sim_state["i"] = i
-    _step_simulation_body(sim_state)
+    _step_simulation_body(
+        sim_state,
+        agents_commands=agents_commands,
+        slam_feedback=slam_feedback,
+    )
     sim_state["current_iteration"] = i + 1
-
-    latest_agents = sim_state["Agents_History"][-1]
-    simulation_frame = {
-        "iteration": i,
-        "sim_time": i * sim_state["dt"],
-        "dt": sim_state["dt"],
-        "done": sim_state["current_iteration"] >= sim_state["num_iter"],
-        "agents_true_state": [copy.deepcopy(agent["State"]) for agent in latest_agents],
-        "target_true_state": copy.deepcopy(sim_state["Target_History"][-1]),
-        "agent_observations": [copy.deepcopy(agent.get("LandSet", [])) for agent in latest_agents],
-        "communication_sets": [copy.deepcopy(agent.get("CommSet", [])) for agent in latest_agents],
-        "target_point_cloud": copy.deepcopy(sim_state["Target_Point_Cloud_History"][-1]),
-    }
-    return simulation_frame
+    return build_simulation_frame(sim_state, i)
 
 def save_simulation_outputs(sim_state):
     tag = sim_state["tag"]

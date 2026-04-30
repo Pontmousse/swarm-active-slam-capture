@@ -7,6 +7,14 @@ import Load_Target as lt
 import pybullet as p
 import pybullet_data
 import time
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
+CUBESAT_SIZE_M = float(shared_config.VIS_CUBESAT_SIZE_M)
 
 # Connect to PyBullet and set up the simulation
 physicsClient = p.connect(p.DIRECT)
@@ -14,15 +22,14 @@ p.setAdditionalSearchPath(pybullet_data.getDataPath())
 p.setGravity(0, 0, 0)
 
 #############################################################################################
-object_name = 'Motor' # Target selected
-tag = 'N1_D5_dt240'
-tag = tag+'_'+object_name
+paths = shared_config.get_sim_data_paths()
+tag = paths["tag"]
 id = 1 # Agent ID to show
 
 #############################################################################################
 
-path_agents = 'Data/Agents_History_'+tag+'.pkl'
-path_target = 'Data/Target_History_'+tag+'.pkl'
+path_agents = paths["agents"]
+path_target = paths["target"]
 
 # Load Simulation History
 Agents_History = Telemetry.load_variable_from_file(path_agents)
@@ -124,7 +131,7 @@ dict = {'current_target_state': Target_History,
 grf = o3d.geometry.TriangleMesh.create_coordinate_frame()
 
 # load initial target pcd
-path_target_pcd = 'Data/Target_PointCloud_'+tag+'.pkl'
+path_target_pcd = paths["target_pcd"]
 target_pcd = o3d.geometry.PointCloud()
 target_pcd.points = o3d.utility.Vector3dVector(Telemetry.load_variable_from_file(path_target_pcd)[0])
 target_pcd.paint_uniform_color([0, 0, 0])
@@ -142,7 +149,11 @@ agent_map.paint_uniform_color([0.1, 0.2, 0.1])
 # load initial agents cubes
 Agent_Geometries = []
 for a in range(N):
-    agent_box = o3d.geometry.TriangleMesh.create_box(width=0.2, height=0.2, depth=0.2)
+    agent_box = o3d.geometry.TriangleMesh.create_box(
+        width=CUBESAT_SIZE_M,
+        height=CUBESAT_SIZE_M,
+        depth=CUBESAT_SIZE_M,
+    )
     agent_box.compute_vertex_normals()
 
     if a == (id-1):

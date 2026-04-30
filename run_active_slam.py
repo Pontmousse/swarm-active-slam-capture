@@ -1,6 +1,6 @@
 import importlib.util
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -10,10 +10,21 @@ DDFGO_MODULE_PATH = PROJECT_ROOT / "DDFGO++" / "SwarmDDFGO++.py"
 
 
 @dataclass
+class ActiveSlamSchedule:
+    perception_delay_steps: int = 0
+    communication_delay_steps: int = 0
+    decision_delay_steps: int = 0
+    control_delay_steps: int = 0
+    physics_delay_steps: int = 0
+    slam_delay_steps: int = 0
+
+
+@dataclass
 class ActiveSlamRunnerConfig:
     slam_stride_steps: int = 240
     slam_period_seconds: float | None = None
     max_steps: int | None = None
+    schedule: ActiveSlamSchedule = field(default_factory=ActiveSlamSchedule)
 
 
 def load_module_from_path(module_name, module_path):
@@ -38,6 +49,35 @@ def should_run_slam(simulation_frame, runner_config, last_slam_time):
 
     stride = max(1, int(runner_config.slam_stride_steps))
     return simulation_frame["iteration"] % stride == 0
+
+
+def build_agents_commands(schedule, simulation_frame=None, slam_feedback=None):
+    _ = schedule, simulation_frame, slam_feedback
+    return None
+
+
+def run_simulation_phase(sim, sim_state, agents_commands=None, slam_feedback=None):
+    return sim.step_simulation(
+        sim_state,
+        agents_commands=agents_commands,
+        slam_feedback=slam_feedback,
+    )
+
+
+def initialize_slam_phase(ddfgo, simulation_frame, config_module):
+    return ddfgo.initialize_slam_online(
+        simulation_frame,
+        config_module=config_module,
+    )
+
+
+def run_slam_phase(ddfgo, slam_state, frame_buffer):
+    return ddfgo.step_slam(slam_state, frame_buffer)
+
+
+def record_slam_feedback(slam_feedback_history, slam_feedback):
+    if slam_feedback is not None:
+        slam_feedback_history.append(slam_feedback)
 
 
 def run_active_slam(
@@ -65,24 +105,29 @@ def run_active_slam(
             if max_steps is not None and sim_state["current_iteration"] >= max_steps:
                 break
 
-            simulation_frame = sim.step_simulation(sim_state, agents_commands=None)
+            agents_commands = build_agents_commands(
+                runner_config.schedule,
+                slam_feedback=latest_slam_feedback,
+            )
+            simulation_frame = run_simulation_phase(
+                sim,
+                sim_state,
+                agents_commands=agents_commands,
+                slam_feedback=latest_slam_feedback,
+            )
             frame_buffer.append(simulation_frame)
 
             if slam_state is None:
-                slam_state = ddfgo.initialize_slam_online(
-                    simulation_frame,
-                    config_module=ddfgo_config_module,
-                )
+                slam_state = initialize_slam_phase(ddfgo, simulation_frame, ddfgo_config_module)
                 latest_slam_feedback = slam_state.get("latest_slam_feedback")
-                if latest_slam_feedback is not None:
-                    slam_feedback_history.append(latest_slam_feedback)
+                record_slam_feedback(slam_feedback_history, latest_slam_feedback)
                 frame_buffer.clear()
                 last_slam_time = simulation_frame["sim_time"]
                 continue
 
             if should_run_slam(simulation_frame, runner_config, last_slam_time):
-                latest_slam_feedback = ddfgo.step_slam(slam_state, frame_buffer)
-                slam_feedback_history.append(latest_slam_feedback)
+                latest_slam_feedback = run_slam_phase(ddfgo, slam_state, frame_buffer)
+                record_slam_feedback(slam_feedback_history, latest_slam_feedback)
                 frame_buffer.clear()
                 last_slam_time = simulation_frame["sim_time"]
 

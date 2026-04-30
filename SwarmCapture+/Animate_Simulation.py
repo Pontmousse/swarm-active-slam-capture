@@ -12,24 +12,32 @@ import Neighborhood as nb
 import Controllers as C
 import Load_Target as lt
 import Plot_Telemetry_Func as Telemetry
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
+CUBESAT_SIZE_M = float(shared_config.VIS_CUBESAT_SIZE_M)
+CUBE_OBJ_BASE_SIZE_M = 0.2
+CUBE_MESH_SCALE = CUBESAT_SIZE_M / CUBE_OBJ_BASE_SIZE_M
 
 #############################################################################################
 #############################################################################################
 #############################################################################################
-DT = 240
+DT = shared_config.DT
 dt = 1/DT # time step
-N = 2 # Number of Agents_Bodies
-D = 5  # Simulation duration
-object_name = 'Motor' # Target selected
+N = shared_config.N # Number of Agents_Bodies
+D = shared_config.D  # Simulation duration
+object_name = shared_config.object_name # Target selected
 #############################################################################################
 
-tag = 'N'+str(N)+'_D'+str(D)+'_dt'+str(DT)
-tag = tag+'_'+object_name
-
-
-path_agents = 'Data/Agents_History_'+tag+'.pkl'
-path_target = 'Data/Target_History_'+tag+'.pkl'
-path_attachment_points = 'Data/Attachment_Points_'+tag+'.pkl'
+paths = shared_config.get_sim_data_paths(n=N, d=D, dt=DT, name=object_name)
+tag = paths["tag"]
+path_agents = paths["agents"]
+path_target = paths["target"]
+path_attachment_points = paths["attachment_points"]
 
 print('\nLoading agents history pickle file...')
 Agents_History = Telemetry.load_variable_from_file(path_agents)
@@ -40,7 +48,12 @@ Target_History = Telemetry.load_variable_from_file(path_target)
 print('Loaded successfully')
 
 print('\nLoading Excel file...')
-input_file = "Data/simulation_data_"+tag+".xlsx"
+input_file = paths["excel"]
+if not os.path.exists(input_file):
+    raise FileNotFoundError(
+        f"Missing simulation excel file: {input_file}\n"
+        "Run the simulation first, or update shared_config.py to the dataset tag you want to animate."
+    )
 df = pd.read_excel(input_file)
 print('Loaded successfully')
 
@@ -118,11 +131,11 @@ obj_file = "Cube_Blender/Cube.obj" # Cube is 20 cm x 20 cm x 20 cm (8U CubeSat)
 agent_visual_shape_id = p.createVisualShape(shapeType=p.GEOM_MESH,
                                       fileName=obj_file,
                                       visualFramePosition=[0, 0, 0],
-                                      meshScale=[1, 1, 1])
+                                      meshScale=[CUBE_MESH_SCALE, CUBE_MESH_SCALE, CUBE_MESH_SCALE])
 agent_collision_shape_id = p.createCollisionShape(shapeType=p.GEOM_MESH,
                                             fileName=obj_file,
                                             collisionFramePosition=[0, 0, 0],
-                                            meshScale=[1, 1, 1])
+                                            meshScale=[CUBE_MESH_SCALE, CUBE_MESH_SCALE, CUBE_MESH_SCALE])
 # Load the texture image
 texture_file = "Cube_Blender/Texture_Cube.png"
 TexCub_id = p.loadTexture(texture_file)

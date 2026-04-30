@@ -3,39 +3,38 @@ import matplotlib.pyplot as plt
 import numpy as np
 import Plot_Telemetry_Func as Telemetry
 import Controllers as C
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
 
 #############################################################################################
 #############################################################################################
 #############################################################################################
 
-DT = 240
+DT = shared_config.DT
 dt = 1/DT # time step
-N = 6 # Number of Agents_Bodies
-D = 150  # Simulation duration
-
-
-
-# object_name = 'Motor' # Target selected
-object_name = 'Orion_Capsule' # Target selected
-
-
-
-
-tag = 'N'+str(N)+'_D'+str(D)+'_dt'+str(DT)
-tag = tag+'_'+object_name
+N = shared_config.N # Number of Agents_Bodies
+D = shared_config.D  # Simulation duration
+object_name = shared_config.object_name
+paths = shared_config.get_sim_data_paths(n=N, d=D, dt=DT, name=object_name)
+tag = paths["tag"]
 
 #############################################################################################
 #############################################################################################
 #############################################################################################
 # Load Simulation History
 
-path_agents = '/home/elghali/Desktop/SwarmCapture+/Data/Agents_History_'+tag+'.pkl'
+path_agents = paths["agents"]
 print('\nLoading agents history pickle file...')
 Agents_History = Telemetry.load_variable_from_file(path_agents)
 print('Loaded successfully')
 
 
-path_attachment_points = '/home/elghali/Desktop/SwarmCapture+/Data/Attachment_Points_'+tag+'.pkl'
+path_attachment_points = paths["attachment_points"]
 print('\nLoading attachment points history pickle file...')
 attachment_points = Telemetry.load_variable_from_file(path_attachment_points)
 print('Loaded successfully')
@@ -168,7 +167,7 @@ for i, observation_array in enumerate(Observations):
 plt.legend()
 
 
-save_path = "/home/elghali/Desktop/SwarmCapture+/Data/N"+str(N)+"_D"+str(D)+"_"+text+".png"
+save_path = str(Path(paths["excel"]).parent / f"N{N}_D{D}_{text}.png")
 plt.savefig(save_path, dpi=300)
 
 # Show the plot

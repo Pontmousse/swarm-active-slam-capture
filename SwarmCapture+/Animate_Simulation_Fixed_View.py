@@ -14,43 +14,57 @@ import Plot_Telemetry_Func as Telemetry
 from PIL import Image
 from moviepy.editor import ImageSequenceClip
 import glob
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
+MODULE_DIR = Path(__file__).resolve().parent
+CUBESAT_SIZE_M = float(shared_config.VIS_CUBESAT_SIZE_M)
+CUBE_OBJ_BASE_SIZE_M = 0.2
+CUBE_MESH_SCALE = CUBESAT_SIZE_M / CUBE_OBJ_BASE_SIZE_M
 
 
 #############################################################################################
 #############################################################################################
 #############################################################################################
-DT = 240
+DT = shared_config.DT
 dt = 1/DT # time step
-N = 6 # Number of Agents_Bodies
-D = 150  # Simulation duration
-
-object_name = 'Orion_Capsule' # Target selected
-# object_name = 'Motor' # Target selected
+N = shared_config.N # Number of Agents_Bodies
+D = shared_config.D  # Simulation duration
+object_name = shared_config.object_name # Target selected
 #############################################################################################
 
-tag = 'N'+str(N)+'_D'+str(D)+'_dt'+str(DT)
-tag = tag+'_'+object_name
+paths = shared_config.get_sim_data_paths(n=N, d=D, dt=DT, name=object_name)
+tag = paths["tag"]
 
 print('\nLoading agents history pickle file...')
-path_agents = '/home/elghali/Desktop/SwarmCapture+/Data/Agents_History_'+tag+'.pkl'
+path_agents = paths["agents"]
 Agents_History = Telemetry.load_variable_from_file(path_agents)
 print('Loaded successfully')
 
 
 print('\nLoading target history pickle file...')
-path_target = '/home/elghali/Desktop/SwarmCapture+/Data/Target_History_'+tag+'.pkl'
+path_target = paths["target"]
 Target_History = Telemetry.load_variable_from_file(path_target)
 print('Loaded successfully')
 
 
 print('\nLoading Excel file...')
-input_file = "/home/elghali/Desktop/SwarmCapture+/Data/simulation_data_"+tag+".xlsx"
+input_file = paths["excel"]
+if not os.path.exists(input_file):
+    raise FileNotFoundError(
+        f"Missing simulation excel file: {input_file}\n"
+        "Run the simulation first, or update shared_config.py to the dataset tag you want to animate."
+    )
 df = pd.read_excel(input_file)
 print('Loaded successfully')
 
 
 print('\nLoading attachment points history pickle file...')
-path_attachment_points = '/home/elghali/Desktop/SwarmCapture+/Data/Attachment_Points_'+tag+'.pkl'
+path_attachment_points = paths["attachment_points"]
 attachment_points = Telemetry.load_variable_from_file(path_attachment_points)
 print('Loaded successfully')
 
@@ -128,7 +142,7 @@ proj_matrix = p.computeProjectionMatrixFOV(fov=60,
 
 target_position = [0, 0, 0]
 target_orientation = p.getQuaternionFromEuler([0, 200, 0])
-texTar_id = p.loadTexture("/home/elghali/Desktop/SwarmCapture+/Targets/Texture_Target.jpg")
+texTar_id = p.loadTexture(str(MODULE_DIR / "Targets" / "Texture_Target.jpg"))
 target_body_id, target_pcd, _ = lt.load_target(target_position,target_orientation,texTar_id)
 
 ########################################################################################################################
@@ -146,17 +160,17 @@ p.resetBaseVelocity(target_body_id, [-0.2, 0.1, 0], [0.1, -1, -0.3])
 
 ########################################################################################################################
 # Create a agent's collision and visual shapes (same for all Agents_Bodies)
-obj_file = "/home/elghali/Desktop/SwarmCapture+/Cube_Blender/Cube.obj" # Cube is 20 cm x 20 cm x 20 cm (8U CubeSat)
+obj_file = str(MODULE_DIR / "Cube_Blender" / "Cube.obj") # Cube is 20 cm x 20 cm x 20 cm (8U CubeSat)
 agent_visual_shape_id = p.createVisualShape(shapeType=p.GEOM_MESH,
                                       fileName=obj_file,
                                       visualFramePosition=[0, 0, 0],
-                                      meshScale=[1, 1, 1])
+                                      meshScale=[CUBE_MESH_SCALE, CUBE_MESH_SCALE, CUBE_MESH_SCALE])
 agent_collision_shape_id = p.createCollisionShape(shapeType=p.GEOM_MESH,
                                             fileName=obj_file,
                                             collisionFramePosition=[0, 0, 0],
-                                            meshScale=[1, 1, 1])
+                                            meshScale=[CUBE_MESH_SCALE, CUBE_MESH_SCALE, CUBE_MESH_SCALE])
 # Load the texture image
-texture_file = "/home/elghali/Desktop/SwarmCapture+/Cube_Blender/Texture_Cube.png"
+texture_file = str(MODULE_DIR / "Cube_Blender" / "Texture_Cube.png")
 TexCub_id = p.loadTexture(texture_file)
 
 #######################################################################################################################
@@ -234,7 +248,7 @@ def save_image(width, height, view_matrix, proj_matrix,i):
     rgb = np.reshape(rgb, (h, w, 4))  # Reshape to (height, width, RGBA)
     rgb = rgb[:, :, :3]  # Drop the alpha channel
 
-    path = '/home/elghali/Desktop/SwarmCapture+/Movie/frame_'+str(i)+'.png'
+    path = str(MODULE_DIR / "Movie" / f"frame_{i}.png")
     image = Image.fromarray(rgb, 'RGB')
     image.save(path)
 
@@ -290,8 +304,8 @@ p.disconnect()
 # Record fancy movie of the animation
 
 # Define the path to your images and the output video
-image_folder = '/home/elghali/Desktop/SwarmCapture+/Movie'  # Path to the folder containing your images
-output_video = '/home/elghali/Desktop/SwarmCapture+/swarm_capture.mp4'  # Output video file
+image_folder = str(MODULE_DIR / "Movie")  # Path to the folder containing your images
+output_video = str(MODULE_DIR / "swarm_capture.mp4")  # Output video file
 
 # Define the list of images
 files = os.listdir(image_folder)

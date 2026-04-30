@@ -213,7 +213,8 @@ Target_Point_Cloud_History = Telemetry.load_variable_from_file(path_target_pcd)
 target_pcd.points = o3d.utility.Vector3dVector(Target_Point_Cloud_History[0])
 target_pcd.paint_uniform_color([0.9, 0.9, 0.9])
 # downsample target pcd as needed
-target_pcd.estimate_normals(search_param)
+if len(target_pcd.points) > 0:
+    target_pcd.estimate_normals(search_param)
 if config.animation_target_voxel_size and config.animation_target_voxel_size > 0:
     target_pcd = target_pcd.voxel_down_sample(voxel_size=float(config.animation_target_voxel_size))
 else:
@@ -225,7 +226,11 @@ Agent_Geometries = []
 Agent_Map_Spheres = []
 for a in range(N):
     # Agent box geometry
-    agent_box = o3d.geometry.TriangleMesh.create_box(width=0.2, height=0.2, depth=0.2)
+    agent_box = o3d.geometry.TriangleMesh.create_box(
+        width=float(config.animation_cubesat_size_m),
+        height=float(config.animation_cubesat_size_m),
+        depth=float(config.animation_cubesat_size_m),
+    )
     agent_box.compute_vertex_normals()
     pos = Agents_History[0][a]['State'][:3]
     dq = Agents_History[0][a]['State'][6:10]
@@ -290,8 +295,9 @@ for a in range(N):
     Agent_Box_Materials.append(agent_box_material)
     
 selected_dense_material = o3d.visualization.rendering.MaterialRecord()
-selected_dense_material.base_color = _desaturate_rgba(colors_maps[selected_agent_idx], mix=0.7)
-selected_dense_material.base_color[3] = 0.9
+selected_dense_rgba = list(_desaturate_rgba(colors_maps[selected_agent_idx], mix=0.7))
+selected_dense_rgba[3] = 0.9
+selected_dense_material.base_color = selected_dense_rgba
 selected_dense_material.shader = "defaultUnlit"
 selected_dense_material.point_size = float(config.animation_dense_point_size)
 

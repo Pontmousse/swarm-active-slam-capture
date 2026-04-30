@@ -4,41 +4,39 @@ import open3d as o3d
 import copy
 import random
 from datetime import timedelta
+import sys
+from pathlib import Path
 
-def load_target(target_position,target_orientation,texTar_id):
+MODULE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = MODULE_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
+
+OBJECT_PARAMS = {
+    "Turksat": {"ply_scale": 0.001, "urdf_scale": 2.0},
+    "Nonconvex": {"ply_scale": 0.03, "urdf_scale": 2.0},
+    "Orion_Capsule": {"ply_scale": 0.0025, "urdf_scale": 0.05 / 0.8850},
+    "Motor": {"ply_scale": 0.030, "urdf_scale": 0.30},
+    "Separation_Stage": {"ply_scale": 0.15, "urdf_scale": 1.0},
+}
+
+def load_target(target_position, target_orientation, texTar_id, object_name=None):
 
     ########################################################################################################################
     # Load PLY and URDF from: \Targets
 
-    # object_name = 'Turksat'
-    # ply_scale = 0.001
-    # search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    # urdf_scale = 2
-
-    # object_name = 'Nonconvex'
-    # ply_scale = 0.03
-    # search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    # urdf_scale = 2
-
-    object_name = 'Orion_Capsule'
-    ply_scale = 0.0025
-    search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    urdf_scale = 0.05/0.8850
-
-    # object_name = 'Motor'
-    # ply_scale = 0.030
-    # search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    # urdf_scale = 0.30
-
-    # object_name = 'Separation_Stage'
-    # ply_scale = 0.15
-    # search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    # urdf_scale = 1
+    object_name = object_name or shared_config.object_name
+    if object_name not in OBJECT_PARAMS:
+        raise ValueError(f"Unsupported object_name '{object_name}'. Supported: {sorted(OBJECT_PARAMS)}")
+    ply_scale = OBJECT_PARAMS[object_name]["ply_scale"]
+    urdf_scale = OBJECT_PARAMS[object_name]["urdf_scale"]
+    search_param = o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
 
     ########################################################################################################################
 
-    urdf_path = '/home/elghali/Desktop/SwarmCapture+/Targets/'+object_name+'/'+object_name+'.urdf'
-    target_body_id = p.loadURDF(urdf_path, basePosition=target_position, baseOrientation=target_orientation, globalScaling=urdf_scale)
+    urdf_path = MODULE_DIR / "Targets" / object_name / f"{object_name}.urdf"
+    target_body_id = p.loadURDF(str(urdf_path), basePosition=target_position, baseOrientation=target_orientation, globalScaling=urdf_scale)
     p.changeVisualShape(target_body_id, -1, rgbaColor=[1, 1, 1, 1])
     p.changeVisualShape(target_body_id, -1, textureUniqueId=texTar_id)
 
@@ -48,8 +46,8 @@ def load_target(target_position,target_orientation,texTar_id):
     urdf_z_range = urdf_z_max - urdf_z_min
 
     ########################################################################################################################
-    ply_path = '/home/elghali/Desktop/SwarmCapture+/Targets/'+object_name+'/'+object_name+'.PLY'
-    mesh = o3d.io.read_triangle_mesh(ply_path)
+    ply_path = MODULE_DIR / "Targets" / object_name / f"{object_name}.PLY"
+    mesh = o3d.io.read_triangle_mesh(str(ply_path))
     mesh.compute_vertex_normals()
     mesh.scale(ply_scale, center=mesh.get_center())
     
@@ -175,9 +173,9 @@ def find_closest_points_KDTree(coordinates, target_pcd):
 def load_predefined_attachment_points(object_name, target_pcd):
 
     # get pre-defined target ids from file
-    path_to_ap_coordinates = '/home/elghali/Desktop/SwarmCapture+/Targets/'+object_name+'/'+object_name+'_keypoints_1.txt'
+    path_to_ap_coordinates = MODULE_DIR / "Targets" / object_name / f"{object_name}_keypoints_1.txt"
     
-    attachment_point_coordinates = read_coordinates_from_file(path_to_ap_coordinates)
+    attachment_point_coordinates = read_coordinates_from_file(str(path_to_ap_coordinates))
     
     # downsample attachment point (reduces computation time and makes it easy for agent to place bids)
     n = 30
@@ -213,7 +211,7 @@ if __name__ == "__main__":
     physicsClient = p.connect(p.DIRECT)
     target_position = [0, 0, 0]
     target_orientation = p.getQuaternionFromEuler([0, 0, 0])
-    texTar_id = p.loadTexture("/home/elghali/Desktop/SwarmCapture+/Targets/Texture_Target.jpg")
+    texTar_id = p.loadTexture(str(MODULE_DIR / "Targets" / "Texture_Target.jpg"))
     target_body_id, target_pcd, object_name = load_target(target_position,target_orientation,texTar_id)
 
 

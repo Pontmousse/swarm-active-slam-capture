@@ -352,6 +352,8 @@ def _initialize_agent_slam_fields(agent, identity_pose, feature_id_namespace_pol
     agent["FGO_Target_W"] = (None, None, None)
     agent["Total_FGO_Error"] = None
     agent["CPU_time"] = None
+    agent["MapSet"] = []
+    agent["MapIdxSet"] = []
     agent["MapNghSet"] = []
     agent["MapGrowth"] = 0
     agent["MapEntropy"] = []
@@ -419,22 +421,45 @@ def _append_online_frame(slam_state, frame):
     return slam_state["num_iter"] - 1
 
 
-def process_slam_update(slam_state, frame_buffer):
-    frames = normalize_simulation_frames(frame_buffer)
+def prepare_slam_frames(simulation_frames):
+    return normalize_simulation_frames(simulation_frames)
+
+
+def select_slam_update_frame(slam_state, frames):
     latest_frame = frames[-1]
     last_processed = slam_state.get("last_processed_iteration")
     if last_processed is not None and latest_frame["iteration"] <= last_processed:
-        return
+        return None
+    return latest_frame
 
+
+def append_online_slam_frame(slam_state, frame):
+    return _append_online_frame(slam_state, frame)
+
+
+def run_slam_update_phase(slam_state, slam_index):
+    run_slam_timestep(slam_state, slam_index)
+
+
+def finalize_slam_update(slam_state, latest_frame):
+    slam_state["last_processed_iteration"] = latest_frame["iteration"]
+    slam_state["last_slam_time"] = latest_frame["sim_time"]
+
+
+def process_slam_update(slam_state, frame_buffer):
+    frames = prepare_slam_frames(frame_buffer)
+    latest_frame = select_slam_update_frame(slam_state, frames)
+    if latest_frame is None:
+        return
+    slam_state["current_global_iteration"] = latest_frame["iteration"]
+    slam_state["current_global_sim_time"] = latest_frame["sim_time"]
     elapsed = latest_frame["sim_time"] - slam_state.get("last_slam_time", frames[0]["sim_time"])
     slam_state["last_slam_elapsed"] = elapsed
     slam_state.setdefault("frame_buffer_history", []).append(frames)
 
-    i = _append_online_frame(slam_state, latest_frame)
-    run_slam_timestep(slam_state, i)
-
-    slam_state["last_processed_iteration"] = latest_frame["iteration"]
-    slam_state["last_slam_time"] = latest_frame["sim_time"]
+    i = append_online_slam_frame(slam_state, latest_frame)
+    run_slam_update_phase(slam_state, i)
+    finalize_slam_update(slam_state, latest_frame)
 
 
 def build_slam_feedback(slam_state):
@@ -685,6 +710,8 @@ def _initialize_slam_batch_body(slam_state):
             Agents_History[i][a]['Total_FGO_Error'] = None
             Agents_History[i][a]['CPU_time'] = None
 
+            Agents_History[i][a]['MapSet'] = []
+            Agents_History[i][a]['MapIdxSet'] = []
             Agents_History[i][a]['MapNghSet'] = [] # Indices of agent that shared landmark
             Agents_History[i][a]['MapGrowth'] = 0
             Agents_History[i][a]['MapEntropy'] = [] # Map landmarks entropy calculated using Gaussian assumption
@@ -1509,7 +1536,21 @@ def _run_slam_timestep_body(slam_state):
     # Convert the estimated time left to a human-readable format
     estimated_time_left_str = str(timedelta(seconds=estimated_time_left))
 
-    print(f'iSAM DDFGO++ - № Agents = {N} | Iteration {i} / {num_iter-1} | Estimated time left: {estimated_time_left_str}')
+    global_iter = slam_state.get("current_global_iteration")
+    global_time = slam_state.get("current_global_sim_time")
+    if global_iter is None:
+        print(
+            f'iSAM DDFGO++ - № Agents = {N} | '
+            f'SLAM local iteration {i} / {num_iter-1} | '
+            f'Estimated time left: {estimated_time_left_str}'
+        )
+    else:
+        print(
+            f'iSAM DDFGO++ - № Agents = {N} | '
+            f'SLAM local iteration {i} / {num_iter-1} | '
+            f'Global sim iteration {global_iter} @ t={global_time:.5f}s | '
+            f'Estimated time left: {estimated_time_left_str}'
+        )
 
 
     ########################################################################################################################

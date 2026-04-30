@@ -5,38 +5,33 @@ import copy
 import time
 from datetime import timedelta
 from pathlib import Path
+import sys
 
 MODULE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = MODULE_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+import shared_config
 
-def load_target(target_position,target_orientation,texTar_id):
+OBJECT_PARAMS = {
+    "Turksat": {"ply_scale": 0.001, "urdf_scale": 2.0},
+    "Nonconvex": {"ply_scale": 0.03, "urdf_scale": 2.0},
+    "Orion_Capsule": {"ply_scale": 0.001, "urdf_scale": 0.04},
+    "Motor": {"ply_scale": 0.012, "urdf_scale": 0.12},
+    "Separation_Stage": {"ply_scale": 0.025, "urdf_scale": 20.0},
+}
+
+def load_target(target_position, target_orientation, texTar_id, object_name=None):
 
     ########################################################################################################################
     # Load PLY and URDF from: \Targets
 
-    # object_name = 'Turksat'
-    # ply_scale = 0.001
-    # search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    # urdf_scale = 2
-
-    # object_name = 'Nonconvex'
-    # ply_scale = 0.03
-    # search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    # urdf_scale = 2
-
-    object_name = 'Orion_Capsule'
-    ply_scale = 0.001
-    search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    urdf_scale = 0.04
-
-    # object_name = 'Motor'
-    # ply_scale = 0.012
-    # search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    # urdf_scale = 0.12
-
-    # object_name = 'Separation_Stage'
-    # ply_scale = 0.025
-    # search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
-    # urdf_scale = 20
+    object_name = object_name or shared_config.object_name
+    if object_name not in OBJECT_PARAMS:
+        raise ValueError(f"Unsupported object_name '{object_name}'. Supported: {sorted(OBJECT_PARAMS)}")
+    ply_scale = OBJECT_PARAMS[object_name]["ply_scale"]
+    urdf_scale = OBJECT_PARAMS[object_name]["urdf_scale"]
+    search_param = o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=40)
 
     ########################################################################################################################
 
