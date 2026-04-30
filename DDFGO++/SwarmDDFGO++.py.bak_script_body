@@ -178,54 +178,18 @@ def derive_runtime(cfg: DdfgoConfig) -> RuntimeDerived:
     )
 
 ###########################################################################################
-# Config-driven runtime controls
+# Angular velocity method registry (used by SLAM batch)
 ###########################################################################################
-object_name = config.object_name
-dt = 1 / config.DT
-step_size = int(config.history_downsample_step)
-if step_size <= 0:
-    step_size = 1
-
-sw = config.sw
-Max_Land = config.Max_Land
-unc = config.unc
-Verbose = config.Verbose
-Verbose_map = config.Verbose_map
-Verbose_kinem = config.Verbose_kinem
-Update_Sliding_Window = config.Update_Sliding_Window
-Init_Pose_Only = config.Init_Pose_Only
-Odom = config.Odom
-Kinem = config.Kinem
-Decentralized = config.Decentralized
-Qn = config.Qn
-Ql = config.Ql
-FGO_Param = config.FGO_Param
-low_pass_filter_coeff = config.low_pass_filter_coeff
-
-# Phase A scaffolding hooks
-USE_LEGACY_RANDOM_SAMPLING = config.USE_LEGACY_RANDOM_SAMPLING
-USE_RANDOM_FEATURE_FILL = config.USE_RANDOM_FEATURE_FILL
-voxel_size = config.voxel_size
-icp_threshold = config.icp_threshold
-scan_downsample_voxel_size = config.scan_downsample_voxel_size
-map_mode = config.map_mode
-feature_noise_std = config.feature_noise_std
-feature_id_namespace_policy = config.feature_id_namespace_policy
-enable_outlier_rejection = config.enable_outlier_rejection
-outlier_max_distance_from_com = config.outlier_max_distance_from_com
-outlier_max_stale_frames = config.outlier_max_stale_frames
-
 calculate_w_methods = {
     "w1": calculate_w1,
     "w2": calculate_w2,
     "w3": calculate_w3,
     "w4": calculate_w4,
 }
-calculate_w = calculate_w_methods.get(config.calculate_w_method, calculate_w4)
-use_window_anchor_prior = config.use_window_anchor_prior
-window_anchor_stride = max(1, int(config.window_anchor_stride))
-use_sparse_gps_prior = config.use_sparse_gps_prior
-gps_stride = max(1, int(config.gps_stride))
+
+
+def resolve_calculate_w(calculate_w_method: str):
+    return calculate_w_methods.get(calculate_w_method, calculate_w4)
 
 
 #############################################################################################
@@ -245,530 +209,301 @@ def save_pickle_files(agents_history, target_history, config_module=config):
         pickle.dump(target_history, file)
 
 
-def load_simulation_histories(config_module=config):
-    data_paths = config_module.get_data_paths()
-    return (
-        load_pickle_file(data_paths["agents"]),
-        load_pickle_file(data_paths["target"]),
-        load_pickle_file(data_paths["target_pcd"]),
+SCRIPT_BODY = r"""
+
+config = __runtime_config_module
+runtime = __runtime_derived
+
+object_name = runtime["object_name"]
+dt = runtime["dt"]
+step_size = runtime["step_size"]
+sw = runtime["sw"]
+Max_Land = runtime["max_land"]
+unc = runtime["unc"]
+Verbose = runtime["verbose"]
+Verbose_map = runtime["verbose_map"]
+Verbose_kinem = runtime["verbose_kinem"]
+Update_Sliding_Window = runtime["update_sliding_window"]
+Init_Pose_Only = runtime["init_pose_only"]
+Odom = runtime["odom"]
+Kinem = runtime["kinem"]
+Decentralized = runtime["decentralized"]
+Qn = runtime["qn"]
+Ql = runtime["ql"]
+FGO_Param = runtime["fgo_param"]
+low_pass_filter_coeff = runtime["low_pass_filter_coeff"]
+USE_LEGACY_RANDOM_SAMPLING = runtime["use_legacy_random_sampling"]
+USE_RANDOM_FEATURE_FILL = runtime["use_random_feature_fill"]
+voxel_size = runtime["voxel_size"]
+icp_threshold = runtime["icp_threshold"]
+scan_downsample_voxel_size = runtime["scan_downsample_voxel_size"]
+map_mode = runtime["map_mode"]
+feature_noise_std = runtime["feature_noise_std"]
+feature_id_namespace_policy = runtime["feature_id_namespace_policy"]
+enable_outlier_rejection = runtime["enable_outlier_rejection"]
+outlier_max_distance_from_com = runtime["outlier_max_distance_from_com"]
+outlier_max_stale_frames = runtime["outlier_max_stale_frames"]
+use_window_anchor_prior = runtime["use_window_anchor_prior"]
+window_anchor_stride = runtime["window_anchor_stride"]
+use_sparse_gps_prior = runtime["use_sparse_gps_prior"]
+gps_stride = runtime["gps_stride"]
+calculate_w = calculate_w_methods.get(runtime["calculate_w_method"], calculate_w4)
+
+#############################################################################################
+# Load Simulation History
+data_paths = config.get_data_paths()
+path_agents = data_paths["agents"]
+path_target = data_paths["target"]
+path_target_pcd = data_paths["target_pcd"]
+
+Agents_History = load_pickle_file(path_agents)
+Target_History = load_pickle_file(path_target)
+Target_Point_Cloud_History = load_pickle_file(path_target_pcd)
+
+###########################################################################################
+# Downsample History
+num_iter = len(Agents_History)
+Agents_History = [Agents_History[i] for i in range(0, num_iter, step_size)]
+Target_History = [Target_History[i] for i in range(0, num_iter, step_size)]
+Target_Point_Cloud_History = [Target_Point_Cloud_History[i] for i in range(0, num_iter, step_size)]
+
+N = len(Agents_History[0]) # Number of agents
+num_iter = len(Agents_History)
+
+if feature_id_namespace_policy == "auto":
+    feature_id_namespace_policy = "registry" if N == 1 else "source_feature_idx"
+if feature_id_namespace_policy not in ("registry", "source_feature_idx"):
+    raise ValueError(
+        f"Unsupported feature_id_namespace_policy: {feature_id_namespace_policy}"
     )
 
 
-def prepare_batch_histories(histories, runtime: RuntimeDerived):
-    agents_history, target_history, target_point_cloud_history = histories
-    num_iter = len(agents_history)
-    step_size = runtime.step_size
-    agents_history = [agents_history[i] for i in range(0, num_iter, step_size)]
-    target_history = [target_history[i] for i in range(0, num_iter, step_size)]
-    target_point_cloud_history = [
-        target_point_cloud_history[i] for i in range(0, num_iter, step_size)
-    ]
-
-    n_agents = len(agents_history[0])
-    num_iter = len(agents_history)
-    feature_id_namespace_policy = runtime.feature_id_namespace_policy
-    if feature_id_namespace_policy == "auto":
-        feature_id_namespace_policy = "registry" if n_agents == 1 else "source_feature_idx"
-    if feature_id_namespace_policy not in ("registry", "source_feature_idx"):
-        raise ValueError(
-            f"Unsupported feature_id_namespace_policy: {feature_id_namespace_policy}"
-        )
-
-    return {
-        "Agents_History": agents_history,
-        "Target_History": target_history,
-        "Target_Point_Cloud_History": target_point_cloud_history,
-        "N": n_agents,
-        "num_iter": num_iter,
-        "feature_id_namespace_policy": feature_id_namespace_policy,
-    }
+print(f"\nNumber of agents: {N}")
+print(f"Number of iterations: {num_iter}")
+print(f"Configuration tag: {config.get_results_tag()}\n")
+if config.enable_notify:
+    notify(
+        f"DDFGO++ started | Agents={N}, Iter={num_iter}, Tag={config.get_results_tag()}",
+        title="DDFGO++ Started",
+        topic=config.notify_topic,
+        verbose=True,
+    )
 
 
-def normalize_simulation_frames(simulation_frames):
-    if simulation_frames is None:
-        raise ValueError("simulation_frames must not be None")
-    if isinstance(simulation_frames, dict):
-        frames = [simulation_frames]
-    else:
-        frames = list(simulation_frames)
-    if not frames:
-        raise ValueError("simulation_frames must contain at least one frame")
+###########################################################################################
+###########################################################################################
+###########################################################################################
 
-    required = {
-        "iteration",
-        "sim_time",
-        "dt",
-        "agents_true_state",
-        "target_true_state",
-        "agent_observations",
-        "communication_sets",
-        "target_point_cloud",
-    }
-    for frame in frames:
-        missing = required.difference(frame)
-        if missing:
-            raise KeyError(f"simulation_frame missing required keys: {sorted(missing)}")
+##############################################################################################################################
+# Factor Graph Parameters
+##############################################################################################################################
+tag = config.get_results_tag()
 
-    return sorted(frames, key=lambda frame: frame["iteration"])
+########## General Rule ##########
+# kappa * dt * Max_Land ~= Qn * Ql
+########## General Rule ##########
 
+# Register landmarks every kappa seconds
+kappa = config.kappa_seconds
+every = max(1, int(np.floor(kappa / dt)))
 
-def simulation_frame_to_history_entries(frame, runtime: RuntimeDerived):
-    agents = []
-    observations = frame["agent_observations"]
-    communication_sets = frame["communication_sets"]
-    for a, state in enumerate(frame["agents_true_state"]):
-        land_set = observations[a] if a < len(observations) else []
-        comm_set = communication_sets[a] if a < len(communication_sets) else []
-        agents.append(
-            {
-                "State": state,
-                "LandSet": land_set,
-                "CommSet": comm_set,
-                "DockSet": [],
-                "CollSet": [],
-                "AntFlkSet": [],
-                "LC": [],
-                "LCD": [],
-                "LCD_Frame": [],
-                "Odometry": [],
-                "Target": [],
-            }
-        )
-    return agents, frame["target_true_state"], frame["target_point_cloud"]
+# %%
+##############################################################################################################################
+# Sensor Parameters
+##############################################################################################################################
+# gtsam parameters
+parameters = gtsam.ISAM2Params()
+parameters.setRelinearizeThreshold(config.relinearize_threshold)
+parameters.relinearizeSkip = config.relinearize_skip
+identity_pose = gtsam.Pose3(gtsam.Rot3.Quaternion(1, 0, 0, 0), gtsam.Point3(0,0,0))
 
+# prior factor noise
+prior_rpy_sigma = unc * config.prior_rpy_sigma_base # degrees
+prior_xyz_sigma = unc * config.prior_xyz_sigma_base # meters
+prior_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([prior_rpy_sigma*np.pi/180,
+                                                        prior_rpy_sigma*np.pi/180,
+                                                        prior_rpy_sigma*np.pi/180,
+                                                        prior_xyz_sigma,
+                                                        prior_xyz_sigma,
+                                                        prior_xyz_sigma]))
 
-def _initialize_agent_slam_fields(agent, identity_pose, feature_id_namespace_policy):
-    agent["State_Estim"] = identity_pose
-    agent["State_Obs"] = identity_pose
-    agent["Odom_Obs"] = identity_pose
-    agent["Target_Measure"] = (None, None, None, None, None, None, None, None, None)
-    agent["Target_True"] = (None, None, None, None, None, None, None, None, None)
-    agent["Target_COM"] = (None, None, None)
-    agent["Target_V"] = (None, None, None)
-    agent["Target_W"] = (None, None, None)
-    agent["Target_Estim"] = np.zeros(9)
-    agent["FGO_Target_COM"] = (None, None, None)
-    agent["FGO_Target_V"] = (None, None, None)
-    agent["FGO_Target_W"] = (None, None, None)
-    agent["Total_FGO_Error"] = None
-    agent["CPU_time"] = None
-    agent["MapNghSet"] = []
-    agent["MapGrowth"] = 0
-    agent["MapEntropy"] = []
-    agent["MergedMapSet"] = np.array([]).reshape(0, 3)
-    agent["MergedMap_Error"] = {
-        "chamfer_distance": 0.0,
-        "rmse_est_to_gt": 0.0,
-        "inlier_ratio": 0.0,
-    }
-    agent["KinLoopClosuresAdded"] = 0
-    agent["KinLoopClosuresUnique"] = 0
-    agent["ReobsCount"] = 0
-    agent["LandmarkRegistry"] = LandmarkRegistry()
-    agent["FeatureDescSet"] = np.array([]).reshape(0, get_descriptor_dim())
-    agent["FeatureGraphIdSet"] = np.array([], dtype=int)
-    agent["FeatureIdNamespace"] = feature_id_namespace_policy
-    agent["OutliersRemovedDistance"] = 0
-    agent["OutliersRemovedStale"] = 0
+window_anchor_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([
+    config.window_anchor_rpy_sigma * np.pi / 180,
+    config.window_anchor_rpy_sigma * np.pi / 180,
+    config.window_anchor_rpy_sigma * np.pi / 180,
+    config.window_anchor_xyz_sigma,
+    config.window_anchor_xyz_sigma,
+    config.window_anchor_xyz_sigma,
+]))
+gps_prior_noise_weak = gtsam.noiseModel.Diagonal.Sigmas(np.array([
+    config.gps_rpy_sigma_weak * np.pi / 180,
+    config.gps_rpy_sigma_weak * np.pi / 180,
+    config.gps_rpy_sigma_weak * np.pi / 180,
+    config.gps_xyz_sigma_weak,
+    config.gps_xyz_sigma_weak,
+    config.gps_xyz_sigma_weak,
+]))
+
+# odometry factor noise
+odometry_rpy_sigma = unc * config.odometry_rpy_sigma_base # degrees
+odometry_xyz_sigma = unc * config.odometry_xyz_sigma_base # meters
+odometry_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([odometry_rpy_sigma*np.pi/180,
+                                                            odometry_rpy_sigma*np.pi/180,
+                                                            odometry_rpy_sigma*np.pi/180,
+                                                            odometry_xyz_sigma,
+                                                            odometry_xyz_sigma,
+                                                            odometry_xyz_sigma]))
+
+# landmark factor noise
+bearing_sigma = unc * config.bearing_sigma_base # degrees
+range_sigma = unc * config.range_sigma_base # meters
+bearing_range_noise_base = gtsam.noiseModel.Diagonal.Sigmas(np.array([bearing_sigma*np.pi/180,
+                                                                       bearing_sigma*np.pi/180,
+                                                                       range_sigma]))
+bearing_range_noise = bearing_range_noise_base
+if config.use_robust_bearing:
+    bearing_range_noise = gtsam.noiseModel.Robust.Create(
+        gtsam.noiseModel.mEstimator.Huber.Create(config.huber_param),
+        bearing_range_noise_base,
+    )
 
 
-def initialize_slam_runtime(first_frame_or_histories, config_module=config, mode="batch"):
-    cfg = DdfgoConfig.from_module(config_module)
-    runtime = derive_runtime(cfg)
-    if mode == "batch":
-        prepared_histories = prepare_batch_histories(first_frame_or_histories, runtime)
-    elif mode == "online":
-        frame = normalize_simulation_frames(first_frame_or_histories)[0]
-        histories = tuple([entry] for entry in simulation_frame_to_history_entries(frame, runtime))
-        prepared_histories = prepare_batch_histories(histories, runtime)
-    else:
-        raise ValueError(f"Unsupported SLAM runtime mode: {mode}")
+# Target kinematic parameters estimation gains and noise models
+target_noise_std = unc * config.target_noise_std
+target_noise_bias = unc * config.target_noise_bias
 
-    slam_state = initialize_slam_batch(prepared_histories, cfg, runtime)
-    slam_state["mode"] = mode
-    slam_state["cfg"] = cfg
-    slam_state["config_module"] = config_module
-    slam_state["runtime_obj"] = runtime
-    return slam_state
+# landmark kinematic factor noise
+kinem_xyz_sigma = unc * config.kinematic_sigma_base
+kinem_noise_base = gtsam.noiseModel.Diagonal.Sigmas(np.array([kinem_xyz_sigma,
+                                                               kinem_xyz_sigma,
+                                                               kinem_xyz_sigma]))
+kinem_noise = kinem_noise_base
+if config.use_robust_kinematic:
+    kinem_noise = gtsam.noiseModel.Robust.Create(
+        gtsam.noiseModel.mEstimator.Cauchy.Create(config.cauchy_param),
+        kinem_noise_base,
+    )
 
-
-def initialize_slam_online(initial_simulation_frame, config_module=config):
-    frames = normalize_simulation_frames(initial_simulation_frame)
-    slam_state = initialize_slam_runtime(frames[0], config_module=config_module, mode="online")
-    slam_state["last_processed_iteration"] = frames[0]["iteration"]
-    slam_state["last_slam_time"] = frames[0]["sim_time"]
-    slam_state["frame_buffer_history"] = []
-    slam_state["latest_slam_feedback"] = build_slam_feedback(slam_state)
-    return slam_state
+# weak landmark prior hook (wired in Phase A; applied in later phases)
+landmark_prior_noise = gtsam.noiseModel.Isotropic.Sigma(3, config.landmark_prior_sigma)
 
 
-def _append_online_frame(slam_state, frame):
-    runtime = slam_state["runtime_obj"]
-    agents, target, target_point_cloud = simulation_frame_to_history_entries(frame, runtime)
-    for agent in agents:
-        _initialize_agent_slam_fields(
-            agent,
-            slam_state["identity_pose"],
-            slam_state["feature_id_namespace_policy"],
-        )
+# target center of mass, velocity and angular velocity factor noise
+pvw_xyz_sigma = unc * config.pvw_sigma_base
+pvw_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([pvw_xyz_sigma,
+                                                       pvw_xyz_sigma,
+                                                       pvw_xyz_sigma]))
 
-    slam_state["Agents_History"].append(agents)
-    slam_state["Target_History"].append(target)
-    slam_state["Target_Point_Cloud_History"].append(target_point_cloud)
-    slam_state["num_iter"] = len(slam_state["Agents_History"])
-    return slam_state["num_iter"] - 1
+# %%
+##############################################################################################################################
+# Main
+##############################################################################################################################
+X = symbol_shorthand.X
+L = symbol_shorthand.L
+P = symbol_shorthand.P
+V = symbol_shorthand.V
+W = symbol_shorthand.W
 
+# define kinematic factor symbolic equations and jacobians
+lf_error, Lvar_l, Lobs_l, Lpar_l = landmark_factor_error()
+lf_jacobian = jacobian(lf_error, Lvar_l)
 
-def process_slam_update(slam_state, frame_buffer):
-    frames = normalize_simulation_frames(frame_buffer)
-    latest_frame = frames[-1]
-    last_processed = slam_state.get("last_processed_iteration")
-    if last_processed is not None and latest_frame["iteration"] <= last_processed:
-        return
-
-    elapsed = latest_frame["sim_time"] - slam_state.get("last_slam_time", frames[0]["sim_time"])
-    slam_state["last_slam_elapsed"] = elapsed
-    slam_state.setdefault("frame_buffer_history", []).append(frames)
-
-    i = _append_online_frame(slam_state, latest_frame)
-    run_slam_timestep(slam_state, i)
-
-    slam_state["last_processed_iteration"] = latest_frame["iteration"]
-    slam_state["last_slam_time"] = latest_frame["sim_time"]
+# define target velocity factor symbolic equations and jacobians        
+velf_error, Lvar_vel, Lpar_vel = target_velocity_factor_error()
+velf_jacobian = jacobian(velf_error, Lvar_vel)
 
 
-def build_slam_feedback(slam_state):
-    agents = slam_state["Agents_History"][-1]
-    map_summaries = []
-    for agent in agents:
-        map_summaries.append(
-            {
-                "map_size": len(agent.get("MapSet", [])),
-                "merged_map_size": len(agent.get("MergedMapSet", [])),
-                "map_growth": agent.get("MapGrowth"),
-                "merged_map_error": agent.get("MergedMap_Error"),
-            }
-        )
-
-    first_agent = agents[0] if agents else {}
-    feedback = {
-        "iteration": slam_state.get("last_processed_iteration", 0),
-        "slam_time": slam_state.get("last_slam_time", 0.0),
-        "agent_pose_estimates": [agent.get("State_Estim") for agent in agents],
-        "target_com_estimate": first_agent.get("Target_COM"),
-        "target_velocity_estimate": first_agent.get("Target_V"),
-        "target_angular_velocity_estimate": first_agent.get("Target_W"),
-        "map_summaries": map_summaries,
-        "map_quality": {
-            "total_fgo_error": [agent.get("Total_FGO_Error") for agent in agents],
-            "visible_fgo_error": [agent.get("Visible_FGO_Error") for agent in agents],
-        },
-        "diagnostics": {
-            "last_slam_elapsed": slam_state.get("last_slam_elapsed", 0.0),
-            "num_slam_steps": len(slam_state["Agents_History"]),
-            "mode": slam_state.get("mode"),
-        },
-    }
-    slam_state["latest_slam_feedback"] = feedback
-    return feedback
-
-
-def step_slam(slam_state, simulation_frames):
-    process_slam_update(slam_state, simulation_frames)
-    return build_slam_feedback(slam_state)
-
-
-
-_BATCH_STATE_NAMES = ['Agents_History', 'D', 'F', 'FeatureDescAll', 'FeatureDesc_sel', 'FeatureId_sel', 'FeatureSet_sel', 'Fidx', 'Graph_List', 'KeyFrames', 'KeyFramesIdx', 'KeyFramesIdx_Hist', 'KeyFramesNgh', 'KeyFramesNgh_Hist', 'KeyFrames_Hist', 'L', 'LandSet', 'LandSet_noisy', 'Lmap_com', 'Lobs_l', 'Lpar_l', 'Lpar_vel', 'Lvar_com', 'Lvar_l', 'Lvar_vel', 'Map', 'MapIdx', 'MapIdx_filtered', 'MapNgh', 'MapNgh_filtered', 'Map_filtered', 'N', 'Ngh', 'P', 'Points', 'Points_prev', 'Qll', 'Qnn', 'R_w', 'Target_History', 'Target_Point_Cloud_History', 'V', 'Value_List', 'W', 'X', 'a', 'alpha', 'ang_obs', 'ang_vel', 'ang_vel_factor', 'avg_time_per_iteration', 'bearing', 'bearing_obs', 'bearing_range_noise', 'bearing_range_noise_base', 'bearing_sigma', 'bias', 'calculate_w', 'com', 'com1_obs', 'com2_obs', 'com_factor', 'com_obs', 'comf_error', 'comf_jacobian', 'cond', 'config', 'decay', 'descriptor', 'elapsed_time', 'estimated_time_left', 'estimated_time_left_str', 'every', 'exist', 'f', 'feature', 'feature_id_namespace_policy', 'feature_obs', 'feature_result', 'filtered_pose', 'frame', 'frame_idx', 'frame_ngh', 'frames_stale', 'gps_prior_noise_weak', 'graph', 'graph_feature_ids', 'i', 'identity_pose', 'idx', 'initial_estimate', 'initial_pose_estim', 'inserted_landmarks', 'isam', 'iterations_left', 'j', 'k', 'kappa', 'key', 'keyframe', 'kin_added', 'kin_ids', 'kinem_factor', 'kinem_noise', 'kinem_noise_base', 'kinem_xyz_sigma', 'l', 'landmark_prior_noise', 'lf_error', 'lf_jacobian', 'list_symbs', 'lm_id', 'lm_id_int', 'lm_ngh', 'lm_pos', 'm', 'map_avg', 'merged_pcd', 'merged_pts', 'new_pose', 'noisy_gps_pose', 'noisy_odom', 'num_iter', 'num_variables', 'obs', 'odom_tf', 'odometry_noise', 'odometry_rpy_sigma', 'odometry_xyz_sigma', 'outliers_removed_distance', 'outliers_removed_stale', 'parameters', 'points', 'points_prev', 'pos', 'pos1', 'pos2', 'pos_arr', 'pose_estim', 'prev_pose', 'prior_noise', 'prior_rpy_sigma', 'prior_xyz_sigma', 'pvw_noise', 'pvw_xyz_sigma', 'ql', 'qn', 'qn_namespace', 'r', 'range_', 'range_obs', 'range_sigma', 'real_odom', 'registry', 'reobs', 'result', 'runtime', 'save_every', 'selectionA', 'selectionL', 'selection_idx', 'source_feature_idx_all', 'source_feature_idx_sel', 'start_time', 'start_time_iteration_agent', 'state_obs', 't_w', 'tag', 'target_noise_bias', 'target_noise_std', 'target_pcd', 'vel', 'vel_factor', 'vel_obs', 'velf_error', 'velf_jacobian', 'window_anchor_noise']
-
-
-def _runtime_bindings(cfg: DdfgoConfig, runtime: RuntimeDerived):
-    runtime_dict = runtime.__dict__
-    return {
-        "config": cfg.config_module,
-        "runtime": runtime_dict,
-        "object_name": runtime.object_name,
-        "dt": runtime.dt,
-        "step_size": runtime.step_size,
-        "sw": runtime.sw,
-        "Max_Land": runtime.max_land,
-        "unc": runtime.unc,
-        "Verbose": runtime.verbose,
-        "Verbose_map": runtime.verbose_map,
-        "Verbose_kinem": runtime.verbose_kinem,
-        "Update_Sliding_Window": runtime.update_sliding_window,
-        "Init_Pose_Only": runtime.init_pose_only,
-        "Odom": runtime.odom,
-        "Kinem": runtime.kinem,
-        "Decentralized": runtime.decentralized,
-        "Qn": runtime.qn,
-        "Ql": runtime.ql,
-        "FGO_Param": runtime.fgo_param,
-        "low_pass_filter_coeff": runtime.low_pass_filter_coeff,
-        "USE_LEGACY_RANDOM_SAMPLING": runtime.use_legacy_random_sampling,
-        "USE_RANDOM_FEATURE_FILL": runtime.use_random_feature_fill,
-        "voxel_size": runtime.voxel_size,
-        "icp_threshold": runtime.icp_threshold,
-        "scan_downsample_voxel_size": runtime.scan_downsample_voxel_size,
-        "map_mode": runtime.map_mode,
-        "feature_noise_std": runtime.feature_noise_std,
-        "feature_id_namespace_policy": runtime.feature_id_namespace_policy,
-        "enable_outlier_rejection": runtime.enable_outlier_rejection,
-        "outlier_max_distance_from_com": runtime.outlier_max_distance_from_com,
-        "outlier_max_stale_frames": runtime.outlier_max_stale_frames,
-        "use_window_anchor_prior": runtime.use_window_anchor_prior,
-        "window_anchor_stride": runtime.window_anchor_stride,
-        "use_sparse_gps_prior": runtime.use_sparse_gps_prior,
-        "gps_stride": runtime.gps_stride,
-        "calculate_w": calculate_w_methods.get(runtime.calculate_w_method, calculate_w4),
-    }
-
-
-def _restore_slam_globals(slam_state):
-    globals().update(slam_state)
-
-
-def _capture_slam_globals(slam_state):
-    for name in _BATCH_STATE_NAMES:
-        if name in globals():
-            slam_state[name] = globals()[name]
-
-
-def _initialize_slam_batch_body(slam_state):
-    global D, Graph_List, KeyFramesIdx_Hist, KeyFramesNgh_Hist, KeyFrames_Hist, L, Lobs_l, Lpar_l, Lpar_vel, Lvar_l, Lvar_vel, P
-    global V, Value_List, W, X, a, alpha, bearing_range_noise, bearing_range_noise_base, bearing_sigma, every, gps_prior_noise_weak, graph
-    global i, identity_pose, initial_estimate, initial_pose_estim, kappa, kinem_noise, kinem_noise_base, kinem_xyz_sigma, landmark_prior_noise, lf_error, lf_jacobian, noisy_gps_pose
-    global odometry_noise, odometry_rpy_sigma, odometry_xyz_sigma, parameters, prior_noise, prior_rpy_sigma, prior_xyz_sigma, pvw_noise, pvw_xyz_sigma, range_sigma, start_time, tag
-    global target_noise_bias, target_noise_std, velf_error, velf_jacobian, window_anchor_noise
-    _restore_slam_globals(slam_state)
-    ###########################################################################################
-    ###########################################################################################
-    ###########################################################################################
-
-    ##############################################################################################################################
-    # Factor Graph Parameters
-    ##############################################################################################################################
-    tag = config.get_results_tag()
-
-    ########## General Rule ##########
-    # kappa * dt * Max_Land ~= Qn * Ql
-    ########## General Rule ##########
-
-    # Register landmarks every kappa seconds
-    kappa = config.kappa_seconds
-    every = max(1, int(np.floor(kappa / dt)))
-
-    # %%
-    ##############################################################################################################################
-    # Sensor Parameters
-    ##############################################################################################################################
-    # gtsam parameters
-    parameters = gtsam.ISAM2Params()
-    parameters.setRelinearizeThreshold(config.relinearize_threshold)
-    parameters.relinearizeSkip = config.relinearize_skip
-    identity_pose = gtsam.Pose3(gtsam.Rot3.Quaternion(1, 0, 0, 0), gtsam.Point3(0,0,0))
-
-    # prior factor noise
-    prior_rpy_sigma = unc * config.prior_rpy_sigma_base # degrees
-    prior_xyz_sigma = unc * config.prior_xyz_sigma_base # meters
-    prior_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([prior_rpy_sigma*np.pi/180,
-                                                            prior_rpy_sigma*np.pi/180,
-                                                            prior_rpy_sigma*np.pi/180,
-                                                            prior_xyz_sigma,
-                                                            prior_xyz_sigma,
-                                                            prior_xyz_sigma]))
-
-    window_anchor_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([
-        config.window_anchor_rpy_sigma * np.pi / 180,
-        config.window_anchor_rpy_sigma * np.pi / 180,
-        config.window_anchor_rpy_sigma * np.pi / 180,
-        config.window_anchor_xyz_sigma,
-        config.window_anchor_xyz_sigma,
-        config.window_anchor_xyz_sigma,
-    ]))
-    gps_prior_noise_weak = gtsam.noiseModel.Diagonal.Sigmas(np.array([
-        config.gps_rpy_sigma_weak * np.pi / 180,
-        config.gps_rpy_sigma_weak * np.pi / 180,
-        config.gps_rpy_sigma_weak * np.pi / 180,
-        config.gps_xyz_sigma_weak,
-        config.gps_xyz_sigma_weak,
-        config.gps_xyz_sigma_weak,
-    ]))
-
-    # odometry factor noise
-    odometry_rpy_sigma = unc * config.odometry_rpy_sigma_base # degrees
-    odometry_xyz_sigma = unc * config.odometry_xyz_sigma_base # meters
-    odometry_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([odometry_rpy_sigma*np.pi/180,
-                                                                odometry_rpy_sigma*np.pi/180,
-                                                                odometry_rpy_sigma*np.pi/180,
-                                                                odometry_xyz_sigma,
-                                                                odometry_xyz_sigma,
-                                                                odometry_xyz_sigma]))
-
-    # landmark factor noise
-    bearing_sigma = unc * config.bearing_sigma_base # degrees
-    range_sigma = unc * config.range_sigma_base # meters
-    bearing_range_noise_base = gtsam.noiseModel.Diagonal.Sigmas(np.array([bearing_sigma*np.pi/180,
-                                                                           bearing_sigma*np.pi/180,
-                                                                           range_sigma]))
-    bearing_range_noise = bearing_range_noise_base
-    if config.use_robust_bearing:
-        bearing_range_noise = gtsam.noiseModel.Robust.Create(
-            gtsam.noiseModel.mEstimator.Huber.Create(config.huber_param),
-            bearing_range_noise_base,
-        )
-
-
-    # Target kinematic parameters estimation gains and noise models
-    target_noise_std = unc * config.target_noise_std
-    target_noise_bias = unc * config.target_noise_bias
-
-    # landmark kinematic factor noise
-    kinem_xyz_sigma = unc * config.kinematic_sigma_base
-    kinem_noise_base = gtsam.noiseModel.Diagonal.Sigmas(np.array([kinem_xyz_sigma,
-                                                                   kinem_xyz_sigma,
-                                                                   kinem_xyz_sigma]))
-    kinem_noise = kinem_noise_base
-    if config.use_robust_kinematic:
-        kinem_noise = gtsam.noiseModel.Robust.Create(
-            gtsam.noiseModel.mEstimator.Cauchy.Create(config.cauchy_param),
-            kinem_noise_base,
-        )
-
-    # weak landmark prior hook (wired in Phase A; applied in later phases)
-    landmark_prior_noise = gtsam.noiseModel.Isotropic.Sigma(3, config.landmark_prior_sigma)
-
-
-    # target center of mass, velocity and angular velocity factor noise
-    pvw_xyz_sigma = unc * config.pvw_sigma_base
-    pvw_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([pvw_xyz_sigma,
-                                                           pvw_xyz_sigma,
-                                                           pvw_xyz_sigma]))
-
-    # %%
-    ##############################################################################################################################
-    # Main
-    ##############################################################################################################################
-    X = symbol_shorthand.X
-    L = symbol_shorthand.L
-    P = symbol_shorthand.P
-    V = symbol_shorthand.V
-    W = symbol_shorthand.W
-
-    # define kinematic factor symbolic equations and jacobians
-    lf_error, Lvar_l, Lobs_l, Lpar_l = landmark_factor_error()
-    lf_jacobian = jacobian(lf_error, Lvar_l)
-
-    # define target velocity factor symbolic equations and jacobians        
-    velf_error, Lvar_vel, Lpar_vel = target_velocity_factor_error()
-    velf_jacobian = jacobian(velf_error, Lvar_vel)
-
-
-    # Set new keys in dicitonary structure
-    for i in range(num_iter):
-        for a in range(N):
-            Agents_History[i][a]['State_Estim'] = identity_pose
-            Agents_History[i][a]['State_Obs'] = identity_pose
-            Agents_History[i][a]['Odom_Obs'] = identity_pose
-            Agents_History[i][a]['Target_Measure'] = (None, None, None,None, None, None,None, None, None)
-            Agents_History[i][a]['Target_True'] = (None, None, None,None, None, None,None, None, None)
-        
-            Agents_History[i][a]['Target_COM'] = (None, None, None)
-            Agents_History[i][a]['Target_V'] = (None, None, None)
-            Agents_History[i][a]['Target_W'] = (None, None, None)
-            Agents_History[i][a]['Target_Estim'] = np.zeros(9)
-        
-            Agents_History[i][a]['FGO_Target_COM'] = (None, None, None)
-            Agents_History[i][a]['FGO_Target_V'] = (None, None, None)
-            Agents_History[i][a]['FGO_Target_W'] = (None, None, None)
-        
-            Agents_History[i][a]['Total_FGO_Error'] = None
-            Agents_History[i][a]['CPU_time'] = None
-
-            Agents_History[i][a]['MapNghSet'] = [] # Indices of agent that shared landmark
-            Agents_History[i][a]['MapGrowth'] = 0
-            Agents_History[i][a]['MapEntropy'] = [] # Map landmarks entropy calculated using Gaussian assumption
-            Agents_History[i][a]['MergedMapSet'] = np.array([]).reshape(0, 3)
-            Agents_History[i][a]['MergedMap_Error'] = {
-                'chamfer_distance': 0.0,
-                'rmse_est_to_gt': 0.0,
-                'inlier_ratio': 0.0
-            }
-            Agents_History[i][a]['KinLoopClosuresAdded'] = 0
-            Agents_History[i][a]['KinLoopClosuresUnique'] = 0
-            Agents_History[i][a]['ReobsCount'] = 0
-            Agents_History[i][a]['LandmarkRegistry'] = LandmarkRegistry()
-            Agents_History[i][a]['FeatureDescSet'] = np.array([]).reshape(0, get_descriptor_dim())
-            Agents_History[i][a]['FeatureGraphIdSet'] = np.array([], dtype=int)
-            Agents_History[i][a]['FeatureIdNamespace'] = feature_id_namespace_policy
-            Agents_History[i][a]['OutliersRemovedDistance'] = 0
-            Agents_History[i][a]['OutliersRemovedStale'] = 0
-
-
-    Graph_List = []
-    Value_List = []
-
+# Set new keys in dicitonary structure
+for i in range(num_iter):
     for a in range(N):
-        graph = gtsam.NonlinearFactorGraph()
-        initial_estimate = gtsam.Values()
-    
-    
-        initial_pose_estim = add_noise_to_pose(true_pose(Agents_History, a,0), prior_xyz_sigma, prior_rpy_sigma)
-        noisy_gps_pose = add_noise_to_pose(true_pose(Agents_History, a,0), prior_xyz_sigma, prior_rpy_sigma)
-    
-        graph.add(gtsam.PriorFactorPose3(varX(X,a,0), noisy_gps_pose, prior_noise))
-        initial_estimate.insert(varX(X,a,0), initial_pose_estim)
+        Agents_History[i][a]['State_Estim'] = identity_pose
+        Agents_History[i][a]['State_Obs'] = identity_pose
+        Agents_History[i][a]['Odom_Obs'] = identity_pose
+        Agents_History[i][a]['Target_Measure'] = (None, None, None,None, None, None,None, None, None)
+        Agents_History[i][a]['Target_True'] = (None, None, None,None, None, None,None, None, None)
+        
+        Agents_History[i][a]['Target_COM'] = (None, None, None)
+        Agents_History[i][a]['Target_V'] = (None, None, None)
+        Agents_History[i][a]['Target_W'] = (None, None, None)
+        Agents_History[i][a]['Target_Estim'] = np.zeros(9)
+        
+        Agents_History[i][a]['FGO_Target_COM'] = (None, None, None)
+        Agents_History[i][a]['FGO_Target_V'] = (None, None, None)
+        Agents_History[i][a]['FGO_Target_W'] = (None, None, None)
+        
+        Agents_History[i][a]['Total_FGO_Error'] = None
+        Agents_History[i][a]['CPU_time'] = None
 
-        Graph_List.append(graph)
-        Value_List.append(initial_estimate)
-    
-        # History initialization
-        Agents_History[0][a]['State_Estim'] = initial_pose_estim
-        Agents_History[0][a]['State_Obs'] = noisy_gps_pose
-        Agents_History[0][a]['Odom_Obs'] = identity_pose
-        Agents_History[0][a]['Target_Measure'] = measure_target_params(Target_History[0], target_noise_std, target_noise_bias)
-        Agents_History[0][a]['Target_True'] = measure_target_params(Target_History[0], 0*target_noise_std, 0*target_noise_bias)
-    
-        Agents_History[0][a]['Target_COM'] = np.array([0,0,0])
-        Agents_History[0][a]['Target_V'] = np.array([0,0,0])
-        Agents_History[0][a]['Target_W'] = np.array([0,0,0])
-        Agents_History[0][a]['Target_Estim'] = np.array([0,0,0,0,0,0,0,0,0], dtype=np.float64)
-    
-        Agents_History[0][a]['FGO_Target_COM'] = np.array([0,0,0])
-        Agents_History[0][a]['FGO_Target_V'] = np.array([0,0,0])
-        Agents_History[0][a]['FGO_Target_W'] = np.array([0,0,0])
-    
-        Agents_History[0][a]['Total_FGO_Error'] = total_fgo_error(Agents_History[0][a], Target_Point_Cloud_History[0])
-        Agents_History[0][a]['CPU_time'] = 0
-
-    
-    # time to reach convergence on target parameters estimates.
-    D = dt*step_size*num_iter # Period or Duration
-    alpha = 100*D/num_iter # higher means higher rate of convergence.
-
-    # Record the start time for the entire loop
-    start_time = time.time()
-
-    # Frame registration for front-end SLAM and loop closure detection
-    KeyFrames_Hist = [[]]
-    KeyFramesIdx_Hist = [[]]
-    KeyFramesNgh_Hist = [[]]
-
-    _capture_slam_globals(slam_state)
+        Agents_History[i][a]['MapNghSet'] = [] # Indices of agent that shared landmark
+        Agents_History[i][a]['MapGrowth'] = 0
+        Agents_History[i][a]['MapEntropy'] = [] # Map landmarks entropy calculated using Gaussian assumption
+        Agents_History[i][a]['MergedMapSet'] = np.array([]).reshape(0, 3)
+        Agents_History[i][a]['MergedMap_Error'] = {
+            'chamfer_distance': 0.0,
+            'rmse_est_to_gt': 0.0,
+            'inlier_ratio': 0.0
+        }
+        Agents_History[i][a]['KinLoopClosuresAdded'] = 0
+        Agents_History[i][a]['KinLoopClosuresUnique'] = 0
+        Agents_History[i][a]['ReobsCount'] = 0
+        Agents_History[i][a]['LandmarkRegistry'] = LandmarkRegistry()
+        Agents_History[i][a]['FeatureDescSet'] = np.array([]).reshape(0, get_descriptor_dim())
+        Agents_History[i][a]['FeatureGraphIdSet'] = np.array([], dtype=int)
+        Agents_History[i][a]['FeatureIdNamespace'] = feature_id_namespace_policy
+        Agents_History[i][a]['OutliersRemovedDistance'] = 0
+        Agents_History[i][a]['OutliersRemovedStale'] = 0
 
 
-def _run_slam_timestep_body(slam_state):
-    global F, FeatureDescAll, FeatureDesc_sel, FeatureId_sel, FeatureSet_sel, Fidx, KeyFrames, KeyFramesIdx, KeyFramesNgh, LandSet, LandSet_noisy, Lmap_com
-    global Lvar_com, Map, MapIdx, MapIdx_filtered, MapNgh, MapNgh_filtered, Map_filtered, Ngh, Points, Points_prev, Qll, Qnn
-    global R_w, a, ang_obs, ang_vel, ang_vel_factor, avg_time_per_iteration, bearing, bearing_obs, bias, com, com1_obs, com2_obs
-    global com_factor, com_obs, comf_error, comf_jacobian, cond, decay, descriptor, elapsed_time, estimated_time_left, estimated_time_left_str, exist, f
-    global feature, feature_obs, feature_result, filtered_pose, frame, frame_idx, frame_ngh, frames_stale, graph_feature_ids, idx, inserted_landmarks, isam
-    global iterations_left, j, k, key, keyframe, kin_added, kin_ids, kinem_factor, l, list_symbs, lm_id, lm_id_int
-    global lm_ngh, lm_pos, m, map_avg, merged_pcd, merged_pts, new_pose, noisy_gps_pose, noisy_odom, num_variables, obs, odom_tf
-    global outliers_removed_distance, outliers_removed_stale, points, points_prev, pos, pos1, pos2, pos_arr, pose_estim, prev_pose, ql, qn
-    global qn_namespace, r, range_, range_obs, real_odom, registry, reobs, result, save_every, selectionA, selectionL, selection_idx
-    global source_feature_idx_all, source_feature_idx_sel, start_time_iteration_agent, state_obs, t_w, target_pcd, vel, vel_factor, vel_obs
-    _restore_slam_globals(slam_state)
+Graph_List = []
+Value_List = []
+
+for a in range(N):
+    graph = gtsam.NonlinearFactorGraph()
+    initial_estimate = gtsam.Values()
+    
+    
+    initial_pose_estim = add_noise_to_pose(true_pose(Agents_History, a,0), prior_xyz_sigma, prior_rpy_sigma)
+    noisy_gps_pose = add_noise_to_pose(true_pose(Agents_History, a,0), prior_xyz_sigma, prior_rpy_sigma)
+    
+    graph.add(gtsam.PriorFactorPose3(varX(X,a,0), noisy_gps_pose, prior_noise))
+    initial_estimate.insert(varX(X,a,0), initial_pose_estim)
+
+    Graph_List.append(graph)
+    Value_List.append(initial_estimate)
+    
+    # History initialization
+    Agents_History[0][a]['State_Estim'] = initial_pose_estim
+    Agents_History[0][a]['State_Obs'] = noisy_gps_pose
+    Agents_History[0][a]['Odom_Obs'] = identity_pose
+    Agents_History[0][a]['Target_Measure'] = measure_target_params(Target_History[0], target_noise_std, target_noise_bias)
+    Agents_History[0][a]['Target_True'] = measure_target_params(Target_History[0], 0*target_noise_std, 0*target_noise_bias)
+    
+    Agents_History[0][a]['Target_COM'] = np.array([0,0,0])
+    Agents_History[0][a]['Target_V'] = np.array([0,0,0])
+    Agents_History[0][a]['Target_W'] = np.array([0,0,0])
+    Agents_History[0][a]['Target_Estim'] = np.array([0,0,0,0,0,0,0,0,0], dtype=np.float64)
+    
+    Agents_History[0][a]['FGO_Target_COM'] = np.array([0,0,0])
+    Agents_History[0][a]['FGO_Target_V'] = np.array([0,0,0])
+    Agents_History[0][a]['FGO_Target_W'] = np.array([0,0,0])
+    
+    Agents_History[0][a]['Total_FGO_Error'] = total_fgo_error(Agents_History[0][a], Target_Point_Cloud_History[0])
+    Agents_History[0][a]['CPU_time'] = 0
+
+    
+# time to reach convergence on target parameters estimates.
+D = dt*step_size*num_iter # Period or Duration
+alpha = 100*D/num_iter # higher means higher rate of convergence.
+
+# Record the start time for the entire loop
+start_time = time.time()
+
+# Frame registration for front-end SLAM and loop closure detection
+KeyFrames_Hist = [[]]
+KeyFramesIdx_Hist = [[]]
+KeyFramesNgh_Hist = [[]]
+
+for i in range(1, num_iter):
     # Convergence to real kinematic parameters
     decay = np.exp(-alpha * i)
     bias = 15*target_noise_bias * decay
@@ -784,14 +519,14 @@ def _run_slam_timestep_body(slam_state):
     frame = [[] for _ in range(N)]
     frame_idx = [[] for _ in range(N)]
     frame_ngh = [[] for _ in range(N)]
-
+    
     for a in range(N):
         # CPU Time
         start_time_iteration_agent = time.time()
         Agents_History[i][a]['KinLoopClosuresAdded'] = 0
         Agents_History[i][a]['KinLoopClosuresUnique'] = 0
         Agents_History[i][a]['ReobsCount'] = 0
-
+        
         ############################################################
         # Get Target estimates at given time step
         Agents_History[i][a]['Target_Measure'] = measure_target_params(Target_History[i], target_noise_std, bias)
@@ -806,46 +541,46 @@ def _run_slam_timestep_body(slam_state):
         # com = Agents_History[i][a]['Target_True'][:3]
         # vel = Agents_History[i][a]['Target_True'][3:6]
         # ang_vel = Agents_History[i][a]['Target_True'][6:9]
-
+        
         # feedback estimates calculated outside the factor graph
         com = Agents_History[i-1][a]['Target_COM']
         vel = Agents_History[i-1][a]['Target_V']
         ang_vel = Agents_History[i-1][a]['Target_W']
-
+        
         # feedback estimates calculate inside the factor graph
         # com = Agents_History[i-1][a]['FGO_Target_COM']
         # vel = Agents_History[i-1][a]['FGO_Target_V']
         # ang_vel = Agents_History[i-1][a]['FGO_Target_W']
-
+        
         ####################################################################
         # Front End
         ####################################################################
         if Verbose: print('\nFront-End running...')
-
+        
         ####################################
         # GPS Factors
         ####################################
-
+        
         # GPS Observation
         noisy_gps_pose = add_noise_to_pose(true_pose(Agents_History,a,i), prior_xyz_sigma, prior_rpy_sigma)
         Agents_History[i][a]['State_Obs'] = noisy_gps_pose  
-
+            
         # Odometry Observation   
         real_odom = true_pose(Agents_History,a,i-1).transformPoseTo(true_pose(Agents_History,a,i))
         noisy_odom = add_noise_to_pose(real_odom, odometry_xyz_sigma, odometry_rpy_sigma)
         Agents_History[i][a]['Odom_Obs'] = noisy_odom
-
+        
         # State Propagation
         pose_estim = Agents_History[i-1][a]['State_Estim'].compose(noisy_odom)
         Agents_History[i][a]['State_Estim'] = pose_estim
-
+        
         ####################################
         # Pose Nodes
         ####################################
-
+        
         # Define and add Pose variable node
         Value_List[a].insert(varX(X,a,i), pose_estim)
-
+        
         # Define and add GPS Factor
         if not Init_Pose_Only:
             if use_window_anchor_prior and (i % window_anchor_stride == 0):
@@ -858,11 +593,11 @@ def _run_slam_timestep_body(slam_state):
             else:
                 Graph_List[a].add(gtsam.PriorFactorPose3(varX(X,a,i), noisy_gps_pose, prior_noise))
                 if Verbose: print(f'Added gps factor to: X{a}_{i}')
-
+            
         ####################################
         # Odometry Factors
         ####################################
-
+        
         # Define and add Odometry Factors
         if Odom and i != 0:
             odom_tf = Agents_History[i-1][a]['Odom_Obs']
@@ -946,7 +681,7 @@ def _run_slam_timestep_body(slam_state):
             if map_mode in ("dense", "hybrid"):
                 Agents_History[i][a]['ScanLocal'] = np.array([]).reshape(0, 3)
 
-
+    
         ####################################
         # Landmark Nodes
         ####################################
@@ -958,11 +693,11 @@ def _run_slam_timestep_body(slam_state):
         kin_ids = set()
 
         for l in range(len(Fidx)):
-
+            
             ####################################
             # Landmark Factors
             ####################################
-
+            
             # Extract landmark observation                 
             feature = F[l]
             descriptor = int(Fidx[l])
@@ -977,7 +712,7 @@ def _run_slam_timestep_body(slam_state):
             # Add extra noise to observations
             bearing_obs = add_noise_to_Unit3(bearing, bearing_sigma)
             range_obs = range_ + np.random.uniform(low=-range_sigma, high=range_sigma, size=(1,))
-
+            
             # Convert bearing range observations into feature global position to act as initial estimate
             feature_obs = BearingRange2Cartesian3D(state_obs, bearing_obs, range_obs)
 
@@ -996,9 +731,9 @@ def _run_slam_timestep_body(slam_state):
                                                     bearing_obs, range_obs,
                                                     bearing_range_noise))
             if Verbose: print(f'Added landmark factor between: X{a}_{i} -> L{descriptor,i}')
-
-
-
+        
+        
+        
             ####################################
             # Kinematic Factors (Loop closures)
             ####################################
@@ -1022,15 +757,15 @@ def _run_slam_timestep_body(slam_state):
                     kin_added += 1
                     kin_ids.add(int(descriptor))
                     if Verbose_kinem: print(f'\nAdded landmark kinematic factor between: L{descriptor,k} -> L{descriptor,i}')
-
+        
         ####################################
         # Communicate with neighborhood
         ####################################
-
+        
         if Decentralized and cond:
             Ngh = Agents_History[i][a]['CommSet']
             Qnn = min(Qn, len(Ngh))
-
+            
             selectionA = random.sample(range(0, len(Ngh)), Qnn)            
             for r in selectionA:
                 qn = Ngh[r]
@@ -1059,7 +794,7 @@ def _run_slam_timestep_body(slam_state):
                     # Add extra noise to observations
                     bearing_obs = add_noise_to_Unit3(bearing, bearing_sigma)
                     range_obs = range_ + np.random.uniform(low=-range_sigma, high=range_sigma, size=(1,))
-
+                    
                     # Convert bearing range observations into feature global position to act as initial estimate
                     feature_obs = BearingRange2Cartesian3D(state_obs, bearing_obs, range_obs)
 
@@ -1078,23 +813,23 @@ def _run_slam_timestep_body(slam_state):
                                                             bearing_obs, range_obs,
                                                             bearing_range_noise))
                     if Verbose: print(f'Added landmark factor between: X{a}_{i} -> L{descriptor,i} - through neighborhood communication')
-
-
+        
+        
         ####################################
         # Target Center of Mass
         ####################################
-
+        
         if FGO_Param and frame[a]:
             # define center of mass factor symbolic equations and jacobians        
             comf_error, Lvar_com, Lmap_com = center_of_mass_factor_error(len(frame[a]))
             comf_jacobian = jacobian(comf_error, Lvar_com)
-
+            
             # calculate and set initial estimate
             map_avg = calculate_com(Agents_History[i-1][a]['MapSet'])
             com_obs = calculate_com(frame[a])
             if not np.isnan(map_avg).any():
                 com_obs = (com_obs + map_avg) / 2
-
+                
             # insert target COM variable at time step in graph
             Value_List[a].insertPoint3(varP(P,a,i) , gtsam.Point3(com_obs))
 
@@ -1105,15 +840,15 @@ def _run_slam_timestep_body(slam_state):
             # list landmarks variable keys and add target com variable key
             list_symbs = descriptor2symbols(L,frame_idx[a],i)
             list_symbs.append(varP(P,a,i))
-
+            
             # define and add factor node
             com_factor = gtsam.CustomFactor(pvw_noise, list_symbs,
                                             partial(com_error, com_obs, map_avg,
                                                     comf_error, comf_jacobian,
                                                     Lvar_com, Lmap_com))
             Graph_List[a].add(com_factor)
-
-
+        
+        
         ####################################
         # Target Velocity
         ####################################
@@ -1121,20 +856,20 @@ def _run_slam_timestep_body(slam_state):
             # calculate observation from landmarks:
             com2_obs = calculate_com(frame[a])
             com1_obs = calculate_com(KeyFrames_Hist[i-1][a])
-
+            
             if not np.isnan(map_avg).any():
                 com2_obs = (com2_obs + map_avg) / 2
                 com1_obs = (com1_obs + map_avg) / 2
-
+            
             vel_obs = (com2_obs - com1_obs) / (dt * step_size)
 
             # insert target vel variable at time step in graph            
             Value_List[a].insertPoint3(varV(V,a,i),gtsam.Point3(vel_obs))
-
+    
             # Add prior with observed landmarks
             Graph_List[a].add(gtsam.PriorFactorPoint3(varV(V,a,i), vel_obs, pvw_noise))
-
-
+            
+            
             # define and add factor node
             list_symbs = [varV(V,a,i), varP(P,a,i-1), varP(P,a,i)]
             vel_factor = gtsam.CustomFactor(pvw_noise, list_symbs,
@@ -1142,8 +877,8 @@ def _run_slam_timestep_body(slam_state):
                                                     velf_error, velf_jacobian,
                                                     Lvar_vel, Lpar_vel))
             Graph_List[a].add(vel_factor)
-
-
+        
+        
         ####################################
         # Target Angular Velocity
         ####################################
@@ -1153,14 +888,14 @@ def _run_slam_timestep_body(slam_state):
                                                     frame_idx[a],
                                                     KeyFrames_Hist[i-1][a],
                                                     KeyFramesIdx_Hist[i-1][a])
-
+            
             if points:
                 # calculate and set initial estimate
                 ang_obs = calculate_w(points, points_prev, dt*step_size) 
-
+                    
                 # insert target COM variable at time step in graph
                 Value_List[a].insertPoint3(varW(W,a,i) , gtsam.Point3(ang_obs))
-
+    
                 # Add prior with observed landmarks
                 Graph_List[a].add(gtsam.PriorFactorPoint3(varW(W,a,i), ang_obs, pvw_noise))
 
@@ -1168,7 +903,7 @@ def _run_slam_timestep_body(slam_state):
                 list_symbs = descriptor2symbols(L,frame_idx[a],i)
                 list_symbs = list_symbs + descriptor2symbols(L,KeyFramesIdx_Hist[i-1][a],i-1)
                 list_symbs.append(varW(W,a,i))
-
+                
                 # define and add factor node
                 ang_vel_factor = gtsam.CustomFactor(pvw_noise, list_symbs,
                                                 partial(ang_vel_error, ang_obs,
@@ -1178,41 +913,41 @@ def _run_slam_timestep_body(slam_state):
             else:
                 # insert target COM variable at time step in graph
                 Value_List[a].insertPoint3(varW(W,a,i) , gtsam.Point3(ang_vel))
-
+            
         Agents_History[i][a]['KinLoopClosuresAdded'] = int(kin_added)
         Agents_History[i][a]['KinLoopClosuresUnique'] = int(len(kin_ids))
-
-
+            
+            
         ####################################################################
         # Back End
         ####################################################################
         if Verbose: print('\nBack-End running...')
-
+        
         # Marginalize graph structure
         if i > 3*sw: Graph_List[a], Value_List[a] = marginalize_factor_graph(Graph_List[a], Value_List[a], 3*sw, i)       
-
+        
         if Verbose:
             print(f"\nNumber of factors in graph of agent {a}: {Graph_List[a].size()}")
             num_variables = len([key for key in Value_List[a].keys()])
             print(f"Number of variables in the values object: {num_variables}\n")
-
-
+        
+        
         # Optimize variables
         isam = gtsam.ISAM2(parameters)
         # print(f'Agent: {a}') # Debug line
         isam.update(Graph_List[a], Value_List[a])
         result = isam.calculateEstimate()
-
-
+        
+       
         # Compute marginals
         # marginals = gtsam.Marginals(Graph_List[a], result)
 
-
+        
         # Clear Variables
         # Value_List[a].clear()
-
-
-
+        
+        
+        
         ####################################
         # Update State Estimates
         ####################################
@@ -1221,15 +956,15 @@ def _run_slam_timestep_body(slam_state):
         new_pose = result.atPose3(varX(X, a, i))
         filtered_pose = low_pass_filter_pose(prev_pose, new_pose, low_pass_filter_coeff)
         Agents_History[i][a]['State_Estim'] = filtered_pose
-
+        
         # No low filter pass filter
         # Agents_History[i][a]['State_Estim'] = result.atPose3(varX(X,a,i))
-
-
+        
+        
         ####################################
         # Update Map Estimates
         ####################################
-
+        
         Map = copy.deepcopy(Agents_History[i-1][a]['MapSet'])
         MapIdx = copy.deepcopy(Agents_History[i-1][a]['MapIdxSet'])
         MapNgh = copy.deepcopy(Agents_History[i-1][a]['MapNghSet'])
@@ -1243,21 +978,21 @@ def _run_slam_timestep_body(slam_state):
             KeyFramesIdx = [keyframe[a] for keyframe in KeyFramesIdx_Hist[-sw:]]
             KeyFrames = [keyframe[a] for keyframe in KeyFrames_Hist[-sw:]]
             KeyFramesNgh = [keyframe[a] for keyframe in KeyFramesNgh_Hist[-sw:]]
-
+    
             #### Sweep over Map features and look them up in keyframes to update
             for descriptor in MapIdx:
                 exist, f, m = find_descriptor_in_keyframes(descriptor, KeyFramesIdx)
                 idx = np.where(np.array(MapIdx) == descriptor)[0][0]
-
+                
                 # Update map feature
                 if exist:
                     k = i-sw+f
-
+                    
                     # position
                     feature_result = result.atPoint3(varL(L,descriptor,k))   
                     feature_result = forward_kinematics(feature_result, i-k, step_size, com, vel, ang_vel)
                     Map[idx] = feature_result
-
+                    
                     # covariance
                     # feature_cov = marginals.marginalCovariance(varL(L,descriptor,k))
                     # feature_cov = forward_covariance(feature_cov, i-k, step_size, ang_vel, noise = 0.05)                    
@@ -1266,28 +1001,28 @@ def _run_slam_timestep_body(slam_state):
                 elif not exist:
                     Map[idx] = forward_kinematics(Map[idx], 1, step_size, com, vel, ang_vel) # One time step
                     # MapEntropy[idx] = Gaussian_Entropy(forward_covariance(feature_cov, 1, step_size, ang_vel, noise = 0.05))               
-
-
+                    
+                    
             #### Sweep over key frames and lookup features not in map to add them
             for j in range(len(KeyFramesIdx)-1, -1, -1): # reverse sweeping
                 for m in range(len(KeyFramesIdx[j])):
                     descriptor = KeyFramesIdx[j][m]
                     if descriptor not in MapIdx:
                         k = i-sw+j
-
+                        
                         # position
                         feature_result = result.atPoint3(varL(L,descriptor,k))
                         feature_result = forward_kinematics(feature_result, i-k, step_size, com, vel, ang_vel)
-
+                        
                         # covariance
                         # feature_cov = marginals.marginalCovariance(varL(L,descriptor,k))
                         # feature_cov = forward_covariance(feature_cov, i-k, step_size, ang_vel, noise = 0.05)                    
-
+                                                
                         Map.append(feature_result)
                         MapIdx.append(descriptor)
                         MapNgh.append(KeyFramesNgh[j][m])
                         # MapEntropy.append(Gaussian_Entropy(feature_cov))
-
+                        
         ################################################################
         ################################################################
 
@@ -1356,9 +1091,9 @@ def _run_slam_timestep_body(slam_state):
         Agents_History[i][a]['MapGrowth'] = len(Agents_History[i][a]['MapSet'])
 
         if Verbose_map: print(f'Map size of agent {a}: {len(Agents_History[i][a]["MapSet"])}')
-
-
-
+            
+        
+    
         #######################################################################
         #######################################################################
         # Calculate Target Parameters
@@ -1373,13 +1108,13 @@ def _run_slam_timestep_body(slam_state):
         # Center of Mass
         ####################################################################
         # Agents_History[i][a]['Target_COM'] = calculate_com(Target_Point_Cloud_History[i])
-
+       
         ##########
         if Points:
             Agents_History[i][a]['Target_COM'] = calculate_com(Points)
         else:
             Agents_History[i][a]['Target_COM'] = Agents_History[i-1][a]['Target_COM']
-
+        
         Agents_History[i][a]['Target_COM'] = low_pass_filter(Agents_History[i][a]['Target_COM'],
                                                              Agents_History[i-1][a]['Target_COM'],
                                                              low_pass_filter_coeff)
@@ -1389,24 +1124,24 @@ def _run_slam_timestep_body(slam_state):
             Agents_History[i][a]['FGO_Target_COM'] = result.atPoint3(varP(P,a,i))
         else:
             Agents_History[i][a]['FGO_Target_COM'] = Agents_History[i-1][a]['FGO_Target_COM']
-
+        
         Agents_History[i][a]['FGO_Target_COM'] = low_pass_filter(Agents_History[i][a]['FGO_Target_COM'],
                                                              Agents_History[i-1][a]['FGO_Target_COM'],
                                                              low_pass_filter_coeff)
-
+        
 
         ####################################################################
         # Translational velocity
         ####################################################################
         # Agents_History[i][a]['Target_V'] = calculate_v(Target_Point_Cloud_History[i],
         #                                                 Target_Point_Cloud_History[i-1], dt*step_size)
-
+        
         ##########
         if Points:
             Agents_History[i][a]['Target_V'] = calculate_v(Points, Points_prev, dt*step_size)
         else:
             Agents_History[i][a]['Target_V'] = Agents_History[i-1][a]['Target_V']
-
+        
         Agents_History[i][a]['Target_V'] = low_pass_filter(Agents_History[i][a]['Target_V'],
                                                              Agents_History[i-1][a]['Target_V'],
                                                              low_pass_filter_coeff)
@@ -1425,7 +1160,7 @@ def _run_slam_timestep_body(slam_state):
             Agents_History[i][a]['FGO_Target_V'] = result.atPoint3(varV(V,a,i))
         else:
             Agents_History[i][a]['FGO_Target_V'] = Agents_History[i-1][a]['FGO_Target_V']
-
+        
         Agents_History[i][a]['FGO_Target_V'] = low_pass_filter(Agents_History[i][a]['FGO_Target_V'],
                                                              Agents_History[i-1][a]['FGO_Target_V'],
                                                              low_pass_filter_coeff)
@@ -1435,13 +1170,13 @@ def _run_slam_timestep_body(slam_state):
         ####################################################################
         # Agents_History[i][a]['Target_W'] = calculate_w4(Target_Point_Cloud_History[i],
         #                                                 Target_Point_Cloud_History[i-1], dt*step_size)
-
+        
         ##########
         if Points:
             Agents_History[i][a]['Target_W'] = calculate_w4(Points, Points_prev, dt*step_size)
         else:
             Agents_History[i][a]['Target_W'] = Agents_History[i-1][a]['Target_W']
-
+        
         Agents_History[i][a]['Target_W'] = low_pass_filter(Agents_History[i][a]['Target_W'],
                                                              Agents_History[i-1][a]['Target_W'],
                                                              low_pass_filter_coeff)
@@ -1451,7 +1186,7 @@ def _run_slam_timestep_body(slam_state):
             Agents_History[i][a]['FGO_Target_W'] = result.atPoint3(varW(W,a,i))
         else:
             Agents_History[i][a]['FGO_Target_W'] = Agents_History[i-1][a]['FGO_Target_W']
-
+        
         Agents_History[i][a]['FGO_Target_W'] = low_pass_filter(Agents_History[i][a]['FGO_Target_W'],
                                                              Agents_History[i-1][a]['FGO_Target_W'],
                                                              low_pass_filter_coeff)
@@ -1476,18 +1211,18 @@ def _run_slam_timestep_body(slam_state):
             Agents_History[i][a]['MergedMap_Error'] = compute_merged_map_error(
                 merged_pcd, target_pcd, voxel_size, icp_threshold
             )
-
+        
         #######################################################################
         #######################################################################
         # Calculate error
         #######################################################################
         #######################################################################
-
+            
         Agents_History[i][a]['Visible_FGO_Error'] = visible_fgo_error(Agents_History[i][a], Target_Point_Cloud_History[i])
         Agents_History[i][a]['Total_FGO_Error'] = total_fgo_error(Agents_History[i][a], Target_Point_Cloud_History[i])
 
-
-
+        
+        
         # Calculate the elapsed time for this iteration for this agent
         Agents_History[i][a]['CPU_time'] = time.time() - start_time_iteration_agent
 
@@ -1498,7 +1233,7 @@ def _run_slam_timestep_body(slam_state):
     #####################################################################################################
     # Calculate the elapsed time for this iteration
     elapsed_time = time.time() - start_time
-
+    
     # Calculate the average time per iteration
     avg_time_per_iteration = elapsed_time / (i + 1)
 
@@ -1536,7 +1271,7 @@ def _run_slam_timestep_body(slam_state):
 
 
 
-
+    
 
     ########################################################################################################################
     # Save using Pickle module for Plotting and Printing in a separate code
@@ -1556,90 +1291,73 @@ def _run_slam_timestep_body(slam_state):
                 topic=config.notify_topic,
                 verbose=True,
             )
+    
 
-    _capture_slam_globals(slam_state)
+########################################################################################################################
+# Save using Pickle module for Plotting and Printing in a separate code
+########################################################################################################################
 
+print('\n')
 
+end_time = time.time()
+runtime = end_time-start_time
 
-def initialize_slam_batch(prepared_histories, cfg: DdfgoConfig, runtime: RuntimeDerived):
-    slam_state = {}
-    slam_state.update(_runtime_bindings(cfg, runtime))
-    slam_state.update(prepared_histories)
-    # Prepared histories resolve auto namespace policy after N is known.
-    slam_state["feature_id_namespace_policy"] = prepared_histories["feature_id_namespace_policy"]
+# Convert the runtime to hours, minutes, and seconds
+hours, remainder = divmod(runtime, 3600)
+minutes, seconds = divmod(remainder, 60)
 
-    print(f"\nNumber of agents: {slam_state['N']}")
-    print(f"Number of iterations: {slam_state['num_iter']}")
-    print(f"Configuration tag: {cfg.config_module.get_results_tag()}\n")
-    if cfg.config_module.enable_notify:
-        notify(
-            f"DDFGO++ started | Agents={slam_state['N']}, Iter={slam_state['num_iter']}, Tag={cfg.config_module.get_results_tag()}",
-            title="DDFGO++ Started",
-            topic=cfg.config_module.notify_topic,
-            verbose=True,
-        )
+# Print the end time
+end_time_formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time))
+print(f"End time: {end_time_formatted}")
 
-    _initialize_slam_batch_body(slam_state)
-    return slam_state
-
-def run_slam_timestep(slam_state, i):
-    slam_state["i"] = i
-    _run_slam_timestep_body(slam_state)
-
-def run_slam_batch(slam_state):
-    for i in range(1, slam_state["num_iter"]):
-        run_slam_timestep(slam_state, i)
-    return {
-        "Agents_History": slam_state["Agents_History"],
-        "Target_History": slam_state["Target_History"],
-        "Target_Point_Cloud_History": slam_state["Target_Point_Cloud_History"],
-        "tag": slam_state["tag"],
-        "num_iter": slam_state["num_iter"],
-        "N": slam_state["N"],
-        "state": slam_state,
-    }
+# Print the runtime
+print(f"Runtime: {int(hours)} hours, {int(minutes)} minutes, {seconds} seconds")
+print('\n')
 
 
-def save_batch_results(results, config_module=config):
-    save_pickle_files(results["Agents_History"], results["Target_History"], config_module)
+########################################################################################################################
+# Save using Pickle module for Plotting and Printing in a separate code
+########################################################################################################################
+print('Saving files using Pickle...')
+save_pickle_files(Agents_History, Target_History, config)
+
+print('\nTwo pickle files saved')
+if config.enable_notify:
+    notify(
+        f"DDFGO++ completed | Agents={N}, Iter={num_iter}, Tag={tag}",
+        title="DDFGO++ Complete",
+        topic=config.notify_topic,
+        verbose=True,
+    )
+
+##############################################################################################################################
+# End
+##############################################################################################################################
+
+print('\n')
+print('%'*30)
+print('iSAM Computation Finished !!!!')
+print('%'*30)
+print('\n')
+print('CODE COMPILED WITHOUT ERRORS')
+print(f'Check files with names ending in "{tag}"')
+print('\n')
+"""
 
 
 def _execute_script_body(cfg: DdfgoConfig):
-    histories = load_simulation_histories(cfg.config_module)
-    slam_state = initialize_slam_runtime(histories, config_module=cfg.config_module, mode="batch")
-    results = run_slam_batch(slam_state)
-
-    print('\n')
-    end_time = time.time()
-    runtime_seconds = end_time - slam_state["start_time"]
-    hours, remainder = divmod(runtime_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    end_time_formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time))
-    print(f"End time: {end_time_formatted}")
-    print(f"Runtime: {int(hours)} hours, {int(minutes)} minutes, {seconds} seconds")
-    print('\n')
-
-    print('Saving files using Pickle...')
-    save_batch_results(results, cfg.config_module)
-
-    print('\nTwo pickle files saved')
-    if cfg.config_module.enable_notify:
-        notify(
-            f"DDFGO++ completed | Agents={results['N']}, Iter={results['num_iter']}, Tag={results['tag']}",
-            title="DDFGO++ Complete",
-            topic=cfg.config_module.notify_topic,
-            verbose=True,
-        )
-
-    print('\n')
-    print('%'*30)
-    print('iSAM Computation Finished !!!!')
-    print('%'*30)
-    print('\n')
-    print('CODE COMPILED WITHOUT ERRORS')
-    print(f'Check files with names ending in "{results["tag"]}"')
-    print('\n')
-    return results
+    runtime = derive_runtime(cfg)
+    exec_globals = {
+        "__name__": "__main__",
+        "__file__": __file__,
+        "__package__": None,
+        "__cached__": None,
+        "__runtime_config_module": cfg.config_module,
+        "__runtime_derived": runtime.__dict__,
+    }
+    exec_globals.update(globals())
+    exec(compile(SCRIPT_BODY, __file__, "exec"), exec_globals, exec_globals)
+    return exec_globals
 
 
 def run_batch_from_config(config_module=config):

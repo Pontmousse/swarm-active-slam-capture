@@ -59,6 +59,8 @@ site/
 **/Results/
 **/outputs/
 **/Outputs/
+**/Data/
+**/Movie/
 **/tmp/
 **/temp/
 **/cache/
