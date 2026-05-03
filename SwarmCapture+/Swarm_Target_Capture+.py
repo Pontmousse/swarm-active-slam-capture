@@ -60,13 +60,13 @@ class SimulationConfig:
     feature_observation_std: float = 0
     max_lidar_pcd: float = 3
     max_angle_pcd: float = 0.3
-    num_features: int = 3
+    num_features: int = 10
     camera_distance: float = 8.46
     camera_yaw: float = -50.0
     camera_pitch: float = -25.0
     camera_target_position: tuple = (-6.02, -3.66, 0.60)
-    num_rays_theta: int = 20
-    num_rays_phi: int = 20
+    num_rays_theta: int = 50
+    num_rays_phi: int = 50
     visualize_rays: bool = False
     visualize_hits: bool = False
     visualize_fraction: float = 0.3
@@ -77,7 +77,7 @@ class SimulationConfig:
     ds: int = 3
     dt: float = 1 / shared_config.DT
     target_velocity: tuple = (0.0, 0.0, 0.0)
-    target_angular_velocity: tuple = (0.005, -0.01, 0.01)
+    target_angular_velocity: tuple = 0*(0.005, -0.01, 0.01)
     viz_interval_seconds: float = 0.1
     save_interval_seconds: float = shared_config.CHECKPOINT_INTERVAL_SECONDS
     performance_weights: tuple = (1, 1, 1000, 1, 10)

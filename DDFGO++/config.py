@@ -35,7 +35,7 @@ animation_downsample_step = 1
 
 sw = 30
 Max_Land = 20
-unc = 0.0
+unc = 0.000001
 
 #############################################################################################
 # Feature and dense-map scaffolding
@@ -53,7 +53,7 @@ map_mode = "hybrid"  # sparse, dense, hybrid
 voxel_size = 0.01
 icp_threshold = 1.5
 scan_downsample_voxel_size = 0.01
-feature_noise_std = None  # None => use Feature_Processing default
+feature_noise_std = 0.0  # None => use Feature_Processing default
 
 # Post-optimization outlier rejection (Phase C)
 enable_outlier_rejection = True
@@ -134,28 +134,28 @@ use_robust_bearing = False
 use_robust_kinematic = False
 huber_param = 1.345
 cauchy_param = 1.0
-landmark_prior_sigma = 2.5
+landmark_prior_sigma = unc * 2.5
 
 #############################################################################################
 # Noise Parameters (base values, scaled by unc)
 #############################################################################################
-prior_rpy_sigma_base = 2.0
-prior_xyz_sigma_base = 0.05
+prior_rpy_sigma_base = unc * 2.0
+prior_xyz_sigma_base = unc * 0.05
 
-odometry_rpy_sigma_base = 0.1
-odometry_xyz_sigma_base = 0.01
+odometry_rpy_sigma_base = unc * 0.1
+odometry_xyz_sigma_base = unc * 0.01
 
-bearing_sigma_base = 0.5
-range_sigma_base = 0.01
-kinematic_sigma_base = 0.001
-pvw_sigma_base = 0.001
+bearing_sigma_base = unc * 0.5
+range_sigma_base = unc * 0.01
+kinematic_sigma_base = unc * 0.001
+pvw_sigma_base = unc * 0.001
 
-target_noise_std = np.array([
+target_noise_std = unc * np.array([
     0.05, 0.05, 0.05,
     0.005, 0.005, 0.005,
     0.005, 0.005, 0.005,
 ])
-target_noise_bias = np.array([2.0, 1.0, 1.0])
+target_noise_bias = unc * np.array([2.0, 1.0, 1.0])
 
 #############################################################################################
 # Saving / notification controls

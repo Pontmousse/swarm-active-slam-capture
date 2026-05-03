@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Common simulation identity
 DT = 240
-N = 4
+N = 1
 D = 15
 object_name = "Orion_Capsule"
 
@@ -17,7 +17,7 @@ stride = 0.1  # seconds per simulation step; controls SLAM frequency and sim tim
 # - SwarmCapture+ writes Excel + pickle histories when sim time crosses this interval.
 # - Online DDFGO++ checkpoint pickles every N SLAM updates, with N chosen so that
 #   N * slam_period_seconds ≈ CHECKPOINT_INTERVAL_SECONDS (see slam_checkpoint_every_updates).
-CHECKPOINT_INTERVAL_SECONDS = 1.0
+CHECKPOINT_INTERVAL_SECONDS = 0.5
 
 
 def slam_checkpoint_every_updates(slam_period_seconds: float) -> int:
