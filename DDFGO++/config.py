@@ -35,7 +35,7 @@ animation_downsample_step = 1
 
 sw = 30
 Max_Land = 20
-unc = 0.6
+unc = 0.0
 
 #############################################################################################
 # Feature and dense-map scaffolding
@@ -161,6 +161,10 @@ target_noise_bias = np.array([2.0, 1.0, 1.0])
 # Saving / notification controls
 #############################################################################################
 save_num_chunks = 10
+# Online SLAM: write checkpoint pickles every N completed SLAM updates (batch mode unchanged).
+# N is chosen so checkpoints occur about every CHECKPOINT_INTERVAL_SECONDS of sim time
+# when SLAM runs every `stride` seconds (same default as ActiveSlamRunnerConfig.slam_period_seconds).
+save_every_slam_updates = shared_config.slam_checkpoint_every_updates(shared_config.stride)
 enable_notify = False
 notify_topic = "DDFGO-standalone"
 

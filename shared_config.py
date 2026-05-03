@@ -7,9 +7,24 @@ from pathlib import Path
 
 # Common simulation identity
 DT = 240
-N = 2
+N = 4
 D = 15
 object_name = "Orion_Capsule"
+
+stride = 0.1  # seconds per simulation step; controls SLAM frequency and sim time scaling
+
+# Checkpoint cadence (simulated seconds)
+# - SwarmCapture+ writes Excel + pickle histories when sim time crosses this interval.
+# - Online DDFGO++ checkpoint pickles every N SLAM updates, with N chosen so that
+#   N * slam_period_seconds ≈ CHECKPOINT_INTERVAL_SECONDS (see slam_checkpoint_every_updates).
+CHECKPOINT_INTERVAL_SECONDS = 1.0
+
+
+def slam_checkpoint_every_updates(slam_period_seconds: float) -> int:
+    """How many SLAM periods fit in CHECKPOINT_INTERVAL_SECONDS (>= 1 update)."""
+    if slam_period_seconds <= 0.0:
+        raise ValueError("slam_period_seconds must be > 0")
+    return max(1, int(round(CHECKPOINT_INTERVAL_SECONDS / slam_period_seconds)))
 
 # Visualization sizing (meters)
 # The Cube.obj asset is authored as a 0.2 m cube; this value controls

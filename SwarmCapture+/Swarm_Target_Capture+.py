@@ -79,7 +79,7 @@ class SimulationConfig:
     target_velocity: tuple = (0.0, 0.0, 0.0)
     target_angular_velocity: tuple = (0.005, -0.01, 0.01)
     viz_interval_seconds: float = 0.1
-    save_interval_seconds: float = 5.0
+    save_interval_seconds: float = shared_config.CHECKPOINT_INTERVAL_SECONDS
     performance_weights: tuple = (1, 1, 1000, 1, 10)
     seed: Optional[int] = None
     target_texture_relpath: str = "Targets/Texture_Target.jpg"
@@ -406,6 +406,14 @@ def _initialize_simulation_body(sim_state):
     p.setTimeStep(dt)
     num_iter = m.floor(duration/dt)
 
+    _save_kappa = cfg["save_interval_seconds"]
+    _save_every_steps = int(m.floor(_save_kappa / dt))
+    _save_every_steps = max(_save_every_steps, 1)
+    print(
+        f"[SIM-DEBUG] save_interval_seconds={_save_kappa:g} dt={dt:g} -> "
+        f"pickles+excel every {_save_every_steps} sim steps"
+    )
+
     # Record the start time for the entire loop
     start_time = time.time()
 
@@ -717,7 +725,8 @@ def record_simulation_frame(sim_state):
     # Convert the estimated time left to a human-readable format
     step = i*dt
     estimated_time_left_str = str(timedelta(seconds=estimated_time_left))
-    if cond_viz: print(f"Time step: {step:.5f}/{duration}   seconds - Estimated time left: {estimated_time_left_str}")
+    if cond_viz:
+        print(f"[SIM] Time step: {step:.5f}/{duration}   seconds - Estimated time left: {estimated_time_left_str}")
 
 
     # Saving in Excel File
@@ -738,7 +747,7 @@ def record_simulation_frame(sim_state):
         # Excel data saving
         ########################################################################################################################
 
-        print('Saving Excel Data...')
+        print('[SIM-SAVE] Saving Excel Data...')
         # Combine all the data into a dictionary
         data = {
             "positions": positions,
@@ -758,32 +767,32 @@ def record_simulation_frame(sim_state):
 
         # The "with" block will automatically close the writer after saving the file.
 
-        print('Excel Data saved')
+        print('[SIM-SAVE] Excel Data saved')
 
 
         ########################################################################################################################
         # Save using Pickle module for Plotting and Printing in a separate code
         ########################################################################################################################
 
-        print('\nSaving agents history pickle file...')
+        print('\n[SIM-SAVE] Saving agents history pickle file...')
         with open(os.path.join(paths["data_dir"], 'Agents_History'+tag+'.pkl'), 'wb') as file:
             pickle.dump(Agents_History, file)
-        print('Saved successfully')
+        print('[SIM-SAVE] Saved successfully')
 
-        print('\nSaving target history pickle file...')
+        print('\n[SIM-SAVE] Saving target history pickle file...')
         with open(os.path.join(paths["data_dir"], 'Target_History'+tag+'.pkl'), 'wb') as file:
             pickle.dump(Target_History, file)
-        print('Saved successfully')
+        print('[SIM-SAVE] Saved successfully')
 
-        print('\nSaving target PCD history pickle file...')
+        print('\n[SIM-SAVE] Saving target PCD history pickle file...')
         with open(os.path.join(paths["data_dir"], 'Target_PointCloud'+tag+'.pkl'), 'wb') as file:
             pickle.dump(Target_Point_Cloud_History, file)
-        print('Saved successfully')
+        print('[SIM-SAVE] Saved successfully')
 
-        print('\nSaving attachment points history pickle file...')
+        print('\n[SIM-SAVE] Saving attachment points history pickle file...')
         with open(os.path.join(paths["data_dir"], 'Attachment_Points'+tag+'.pkl'), 'wb') as file:
             pickle.dump(attachment_points, file)
-        print('Saved successfully')
+        print('[SIM-SAVE] Saved successfully')
 
     ########################################################################################################################
     ########################################################################################################################
@@ -824,6 +833,7 @@ def build_simulation_frame(sim_state, iteration):
         "iteration": iteration,
         "sim_time": iteration * sim_state["dt"],
         "dt": sim_state["dt"],
+        "total_sim_iterations": sim_state["num_iter"],
         "done": sim_state["current_iteration"] >= sim_state["num_iter"],
         "agents_true_state": [copy.deepcopy(agent["State"]) for agent in latest_agents],
         "target_true_state": copy.deepcopy(sim_state["Target_History"][-1]),
@@ -853,6 +863,7 @@ def step_simulation(sim_state, agents_commands=None, slam_feedback=None):
             "iteration": i,
             "sim_time": i * sim_state["dt"],
             "dt": sim_state["dt"],
+            "total_sim_iterations": sim_state["num_iter"],
             "done": True,
             "agents_true_state": [],
             "target_true_state": [],
@@ -870,6 +881,7 @@ def step_simulation(sim_state, agents_commands=None, slam_feedback=None):
     return build_simulation_frame(sim_state, i)
 
 def save_simulation_outputs(sim_state):
+    print("[SIM-SAVE] Writing final simulation outputs (excel + pickles)...")
     tag = sim_state["tag"]
     paths = sim_state["paths"]
     data = {

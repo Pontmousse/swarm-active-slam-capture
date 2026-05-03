@@ -2,6 +2,7 @@ import importlib.util
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+import shared_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -21,8 +22,7 @@ class ActiveSlamSchedule:
 
 @dataclass
 class ActiveSlamRunnerConfig:
-    slam_stride_steps: int = 240
-    slam_period_seconds: float | None = None
+    slam_period_seconds: float = shared_config.stride
     max_steps: int | None = None
     schedule: ActiveSlamSchedule = field(default_factory=ActiveSlamSchedule)
 
@@ -43,12 +43,11 @@ def load_module_from_path(module_name, module_path):
 
 
 def should_run_slam(simulation_frame, runner_config, last_slam_time):
-    if runner_config.slam_period_seconds is not None:
-        elapsed = simulation_frame["sim_time"] - last_slam_time
-        return elapsed >= runner_config.slam_period_seconds
-
-    stride = max(1, int(runner_config.slam_stride_steps))
-    return simulation_frame["iteration"] % stride == 0
+    period = float(runner_config.slam_period_seconds)
+    if period <= 0.0:
+        raise ValueError("slam_period_seconds must be > 0.")
+    elapsed = simulation_frame["sim_time"] - last_slam_time
+    return elapsed >= period
 
 
 def build_agents_commands(schedule, simulation_frame=None, slam_feedback=None):
@@ -91,6 +90,11 @@ def run_active_slam(
 
     if ddfgo_config_module is None:
         ddfgo_config_module = ddfgo.config
+
+    # Match SLAM checkpoint spacing (in simulated time) to shared CHECKPOINT_INTERVAL_SECONDS.
+    ddfgo_config_module.save_every_slam_updates = shared_config.slam_checkpoint_every_updates(
+        float(runner_config.slam_period_seconds)
+    )
 
     sim_state = sim.initialize_simulation(config=sim_config)
     frame_buffer = []

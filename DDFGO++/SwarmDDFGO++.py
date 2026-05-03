@@ -451,6 +451,10 @@ def process_slam_update(slam_state, frame_buffer):
     latest_frame = select_slam_update_frame(slam_state, frames)
     if latest_frame is None:
         return
+    slam_state["slam_update_counter"] = slam_state.get("slam_update_counter", 0) + 1
+    total_sim = latest_frame.get("total_sim_iterations")
+    if total_sim is not None:
+        slam_state["expected_sim_iterations"] = total_sim
     slam_state["current_global_iteration"] = latest_frame["iteration"]
     slam_state["current_global_sim_time"] = latest_frame["sim_time"]
     elapsed = latest_frame["sim_time"] - slam_state.get("last_slam_time", frames[0]["sim_time"])
@@ -1536,19 +1540,39 @@ def _run_slam_timestep_body(slam_state):
     # Convert the estimated time left to a human-readable format
     estimated_time_left_str = str(timedelta(seconds=estimated_time_left))
 
+    mode_run = slam_state.get("mode", "batch")
     global_iter = slam_state.get("current_global_iteration")
     global_time = slam_state.get("current_global_sim_time")
-    if global_iter is None:
+    slam_n = slam_state.get("slam_update_counter")
+    expected_steps = slam_state.get("expected_sim_iterations")
+
+    if mode_run == "online" and slam_n is not None and slam_n >= 1:
+        g_part = ""
+        if global_iter is not None:
+            denom = ""
+            if expected_steps is not None:
+                denom = f" / {expected_steps} sim steps total"
+            g_part = f"Global sim step index {global_iter}{denom} @ t={global_time:.5f}s | "
         print(
-            f'iSAM DDFGO++ - № Agents = {N} | '
-            f'SLAM local iteration {i} / {num_iter-1} | '
+            f'[SLAM] iSAM DDFGO++ — agents={N} | '
+            f'SLAM update #{slam_n} | '
+            f'{g_part}'
+            f'Estimated time left: {estimated_time_left_str}'
+        )
+    elif global_iter is None:
+        print(
+            f'[SLAM] iSAM DDFGO++ — agents={N} | '
+            f'SLAM timestep index {i} / {max(num_iter - 1, 1)} | '
             f'Estimated time left: {estimated_time_left_str}'
         )
     else:
+        denom = ""
+        if expected_steps is not None:
+            denom = f" / {expected_steps} sim steps total"
         print(
-            f'iSAM DDFGO++ - № Agents = {N} | '
-            f'SLAM local iteration {i} / {num_iter-1} | '
-            f'Global sim iteration {global_iter} @ t={global_time:.5f}s | '
+            f'[SLAM] iSAM DDFGO++ — agents={N} | '
+            f'SLAM timestep index {i} / {max(num_iter - 1, 1)} | '
+            f'Global sim step index {global_iter}{denom} @ t={global_time:.5f}s | '
             f'Estimated time left: {estimated_time_left_str}'
         )
 
@@ -1584,12 +1608,21 @@ def _run_slam_timestep_body(slam_state):
     ########################################################################################################################
 
     # Save periodically based on config
-    save_every = max(1, int((num_iter - 1) / max(1, config.save_num_chunks)))
-    if i % save_every == 0:
-        print('\nSaving files using Pickle...')
+    save_every_online = max(1, getattr(config, "save_every_slam_updates", 10))
+    if mode_run == "online":
+        save_every_batch = save_every_online
+        do_save_chk = slam_n >= 1 and (slam_n % save_every_batch == 0)
+    else:
+        save_every_batch = max(1, int((num_iter - 1) / max(1, config.save_num_chunks)))
+        do_save_chk = i % save_every_batch == 0
+    if do_save_chk:
+        if mode_run == "online":
+            print(f"\n[SLAM-SAVE] Saving checkpoint pickles (every {save_every_batch} SLAM updates)\n")
+        else:
+            print(f"\n[SLAM-SAVE] Saving checkpoint pickles (batch save every={save_every_batch} timestep indices)\n")
         save_pickle_files(Agents_History, Target_History, config)
-        print('Two pickle files saved')
-        print(f'Check files with name tag: {tag} \n')
+        print('[SLAM-SAVE] Two pickle files saved')
+        print(f'[SLAM-SAVE] Check files with name tag: {tag} \n')
         if config.enable_notify:
             notify(
                 f"DDFGO++ progress: Iteration {i}/{num_iter-1} saved.",
@@ -1609,9 +1642,11 @@ def initialize_slam_batch(prepared_histories, cfg: DdfgoConfig, runtime: Runtime
     # Prepared histories resolve auto namespace policy after N is known.
     slam_state["feature_id_namespace_policy"] = prepared_histories["feature_id_namespace_policy"]
 
-    print(f"\nNumber of agents: {slam_state['N']}")
-    print(f"Number of iterations: {slam_state['num_iter']}")
-    print(f"Configuration tag: {cfg.config_module.get_results_tag()}\n")
+    slam_state["slam_update_counter"] = 0
+
+    print(f"\n[SLAM-INIT] Number of agents: {slam_state['N']}")
+    print(f"[SLAM-INIT] Number of iterations (SLAM frames loaded): {slam_state['num_iter']}")
+    print(f"[SLAM-INIT] Configuration tag: {cfg.config_module.get_results_tag()}\n")
     if cfg.config_module.enable_notify:
         notify(
             f"DDFGO++ started | Agents={slam_state['N']}, Iter={slam_state['num_iter']}, Tag={cfg.config_module.get_results_tag()}",
@@ -1660,10 +1695,10 @@ def _execute_script_body(cfg: DdfgoConfig):
     print(f"Runtime: {int(hours)} hours, {int(minutes)} minutes, {seconds} seconds")
     print('\n')
 
-    print('Saving files using Pickle...')
+    print('[SLAM-SAVE] Saving files using Pickle...')
     save_batch_results(results, cfg.config_module)
 
-    print('\nTwo pickle files saved')
+    print('\n[SLAM-SAVE] Two pickle files saved')
     if cfg.config_module.enable_notify:
         notify(
             f"DDFGO++ completed | Agents={results['N']}, Iter={results['num_iter']}, Tag={results['tag']}",
