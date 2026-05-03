@@ -14,7 +14,11 @@ from helper import *
 from Custom_Factors import *
 from LandmarkRegistry import LandmarkRegistry
 from Feature_Processing import compute_features, add_noise_to_features, get_descriptor_dim
-from map_merging import store_scan_local, build_merged_map, compute_merged_map_error
+from map_merging import (
+    store_scan_local,
+    build_merged_map,
+    compute_merged_map_error,
+)
 from notify_helper import notify
 import config
 
@@ -321,6 +325,7 @@ def simulation_frame_to_history_entries(frame, runtime: RuntimeDerived):
         comm_set = communication_sets[a] if a < len(communication_sets) else []
         agents.append(
             {
+                "ID": a,
                 "State": state,
                 "LandSet": land_set,
                 "CommSet": comm_set,
@@ -418,7 +423,18 @@ def _append_online_frame(slam_state, frame):
     slam_state["Target_History"].append(target)
     slam_state["Target_Point_Cloud_History"].append(target_point_cloud)
     slam_state["num_iter"] = len(slam_state["Agents_History"])
-    return slam_state["num_iter"] - 1
+    i_new = slam_state["num_iter"] - 1
+    # Carry forward LandmarkRegistry across online SLAM steps. _initialize_agent_slam_fields always
+    # installs an empty LandmarkRegistry(); without this, active_ids cannot reuse prior tracks.
+    if i_new >= 1:
+        hist = slam_state["Agents_History"]
+        prev_agents = hist[i_new - 1]
+        curr_agents = hist[i_new]
+        for ai in range(min(len(curr_agents), len(prev_agents))):
+            prev_reg = prev_agents[ai].get("LandmarkRegistry") if isinstance(prev_agents[ai], dict) else None
+            if prev_reg is not None and isinstance(curr_agents[ai], dict):
+                curr_agents[ai]["LandmarkRegistry"] = copy.deepcopy(prev_reg)
+    return i_new
 
 
 def prepare_slam_frames(simulation_frames):
@@ -827,6 +843,11 @@ def _run_slam_timestep_body(slam_state):
         # Get Target estimates at given time step
         Agents_History[i][a]['Target_Measure'] = measure_target_params(Target_History[i], target_noise_std, bias)
         Agents_History[i][a]['Target_True'] = measure_target_params(Target_History[i], 0*target_noise_std, 0*target_noise_bias)
+        _target_kin_truth_threshold = getattr(config, "target_kinematics_truth_unc_threshold", None)
+        _use_truth_target_kinematics = (
+            _target_kin_truth_threshold is not None
+            and float(config.unc) <= float(_target_kin_truth_threshold)
+        )
 
         # Feedback simulated convergence depending on decay and bias coefficient
         # com = Agents_History[i][a]['Target_Measure'][:3]
@@ -839,9 +860,14 @@ def _run_slam_timestep_body(slam_state):
         # ang_vel = Agents_History[i][a]['Target_True'][6:9]
 
         # feedback estimates calculated outside the factor graph
-        com = Agents_History[i-1][a]['Target_COM']
-        vel = Agents_History[i-1][a]['Target_V']
-        ang_vel = Agents_History[i-1][a]['Target_W']
+        if _use_truth_target_kinematics:
+            com = Agents_History[i][a]['Target_True'][:3]
+            vel = Agents_History[i][a]['Target_True'][3:6]
+            ang_vel = Agents_History[i][a]['Target_True'][6:9]
+        else:
+            com = Agents_History[i-1][a]['Target_COM']
+            vel = Agents_History[i-1][a]['Target_V']
+            ang_vel = Agents_History[i-1][a]['Target_W']
 
         # feedback estimates calculate inside the factor graph
         # com = Agents_History[i-1][a]['FGO_Target_COM']
@@ -1250,7 +1276,11 @@ def _run_slam_timestep_body(slam_state):
         # Low pass filter (LERP for positions and SLERP for quaternions) if desired
         prev_pose = Agents_History[i-1][a]['State_Estim'] if i > 0 else None
         new_pose = result.atPose3(varX(X, a, i))
-        filtered_pose = low_pass_filter_pose(prev_pose, new_pose, low_pass_filter_coeff)
+        _lp_co = float(low_pass_filter_coeff)
+        _lp_th = getattr(config, "pose_low_pass_disable_unc_threshold", None)
+        if _lp_th is not None and float(config.unc) <= float(_lp_th):
+            _lp_co = 1.0
+        filtered_pose = low_pass_filter_pose(prev_pose, new_pose, _lp_co)
         Agents_History[i][a]['State_Estim'] = filtered_pose
 
         # No low filter pass filter
@@ -1487,6 +1517,11 @@ def _run_slam_timestep_body(slam_state):
                                                              Agents_History[i-1][a]['FGO_Target_W'],
                                                              low_pass_filter_coeff)
 
+        if _use_truth_target_kinematics:
+            Agents_History[i][a]['Target_COM'] = np.array(Agents_History[i][a]['Target_True'][:3], dtype=np.float64)
+            Agents_History[i][a]['Target_V'] = np.array(Agents_History[i][a]['Target_True'][3:6], dtype=np.float64)
+            Agents_History[i][a]['Target_W'] = np.array(Agents_History[i][a]['Target_True'][6:9], dtype=np.float64)
+
         # Compatibility field for merged-map utilities
         Agents_History[i][a]['Target_Estim'] = np.concatenate((
             np.array(Agents_History[i][a]['Target_COM'], dtype=np.float64),
@@ -1498,7 +1533,23 @@ def _run_slam_timestep_body(slam_state):
         # Dense map (Phase B) - optional via map_mode
         #######################################################################
         if map_mode in ("dense", "hybrid"):
-            Agents_History[i][a].update(build_merged_map(Agents_History, a, i, sw, step_size, voxel_size))
+            _dense_map_pose_source = getattr(config, "dense_map_pose_source", "state_estim")
+            _dense_map_pose_source_unc_tiny = getattr(config, "dense_map_pose_source_unc_tiny", None)
+            if _dense_map_pose_source_unc_tiny is not None and float(config.unc) <= float(
+                getattr(config, "pose_low_pass_disable_unc_threshold", 0.0)
+            ):
+                _dense_map_pose_source = _dense_map_pose_source_unc_tiny
+            Agents_History[i][a].update(
+                build_merged_map(
+                    Agents_History,
+                    a,
+                    i,
+                    sw,
+                    step_size,
+                    voxel_size,
+                    pose_source=_dense_map_pose_source,
+                )
+            )
             merged_pts = Agents_History[i][a].get('MergedMapSet', np.array([]).reshape(0, 3))
             merged_pcd = o3d.geometry.PointCloud()
             merged_pcd.points = o3d.utility.Vector3dVector(merged_pts)

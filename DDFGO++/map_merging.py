@@ -115,7 +115,17 @@ def merge_voxel(points, voxel_size):
     return points_downsampled
 
 
-def build_merged_map(Agents_History, a, i, sw, step_size, voxel_size):
+def _pose_for_scan(Agents_History, a, k, pose_source):
+    if pose_source == "state_estim":
+        return Agents_History[k][a]['State_Estim']
+    if pose_source == "state_obs":
+        return Agents_History[k][a]['State_Obs']
+    if pose_source == "true_state":
+        return state_array_to_pose3(Agents_History[k][a]['State'])
+    raise ValueError(f"Unsupported dense-map pose source: {pose_source}")
+
+
+def build_merged_map(Agents_History, a, i, sw, step_size, voxel_size, pose_source="state_estim"):
     """
     Build merged dense map from sliding window scans.
     
@@ -161,9 +171,8 @@ def build_merged_map(Agents_History, a, i, sw, step_size, voxel_size):
         if len(ScanLocal) == 0:
             continue
         
-        # Step 2: Transform scan using pose estimate from Agents_History        
-        T_post = Agents_History[k][a]['State_Estim']
-        # T_post = state_array_to_pose3(Agents_History[k][a]['State'])
+        # Step 2: Transform scan using the configured pose source from Agents_History.
+        T_post = _pose_for_scan(Agents_History, a, k, pose_source)
         Pw_k = transform_points(T_post, ScanLocal)
         
         # Step 3: Propagate to current time i

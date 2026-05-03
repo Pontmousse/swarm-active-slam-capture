@@ -74,10 +74,16 @@ Telemetry.plot_pose_graph_optimization(fig_name, plot_title, Case, A, Agents_His
 
 # %%
 # # Orientation
-Case = [6,7,8,9,10,11]
-A = a*np.array([1,1,1,1,1,1])
+# Observed GPS quat (6–9, scatter) + True/Est as scalar components (35–38 vs 39–42).
+# Legacy cases 10–11 mixed vector/packed series and Gaussian smoothing could mislead;
+# use 35–42 for apples-to-apples true vs State_Estim quaternion component plots.
+Case = [6, 7, 8, 9, 35, 36, 37, 38, 39, 40, 41, 42]
+A = a * np.ones(len(Case), dtype=int)
 plot_title = 'Pose Evolution: Orientation'
-Telemetry.plot_pose_graph_optimization(fig_name, plot_title, Case, A, Agents_History_nk, num_iter, step_size)
+# sigma=0: do not Gaussian-smooth quaternion *components* (breaks S^3 constraint and
+# falsely separates "Observed" scatter from smoothed True/Est lines, especially early
+# under fast rotation). Runtime logs show rot_deg_gps_vs_true ~ 0 when unc is tiny.
+Telemetry.plot_pose_graph_optimization(fig_name, plot_title, Case, A, Agents_History_nk, num_iter, step_size, sigma=0)
 
 
 # %% Target Estimation

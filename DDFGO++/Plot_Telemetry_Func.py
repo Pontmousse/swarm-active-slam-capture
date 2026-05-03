@@ -1,5 +1,6 @@
 import numpy as np
 import pickle
+import gtsam
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
@@ -189,18 +190,64 @@ def call_parameter(Agent, case):
     ###########################################################
         
     elif case == 10:
+        # Legacy: raw sim quaternion vector (may confuse plots expecting scalars).
         p = Agent["State"][6:10]
-        title = 'True Quaternion'+' for agent '+str(a)
+        title = 'True Quaternion (raw State[6:10] vector)'+' for agent '+str(a)
 
     elif case == 11:
+        # Legacy: packed 4-vector per timestep (not comparable to scalar Case 6–9 series).
         state_estim = Agent["State_Estim"]
         qx = state_estim.rotation().toQuaternion().x()
         qy = state_estim.rotation().toQuaternion().y()
         qz = state_estim.rotation().toQuaternion().z()
         qw = state_estim.rotation().toQuaternion().w()
         p = [qx, qy, qz, qw]
-        title = 'Estimated Quaternion'+' for agent '+str(a)
-        
+        title = 'Estimated Quaternion (packed xyzw)'+' for agent '+str(a)
+
+    # --- Quaternion scalars: same convention as helper.true_pose (w,x,y,z from State[6:10]=qx,qy,qz,qw) ---
+    elif case == 35:
+        quat = Agent["State"][6:10]
+        r = gtsam.Rot3.Quaternion(float(quat[3]), float(quat[0]), float(quat[1]), float(quat[2]))
+        p = r.toQuaternion().x()
+        title = 'True Quaternion x (GTSAM from State)'+' for agent '+str(a)
+
+    elif case == 36:
+        quat = Agent["State"][6:10]
+        r = gtsam.Rot3.Quaternion(float(quat[3]), float(quat[0]), float(quat[1]), float(quat[2]))
+        p = r.toQuaternion().y()
+        title = 'True Quaternion y (GTSAM from State)'+' for agent '+str(a)
+
+    elif case == 37:
+        quat = Agent["State"][6:10]
+        r = gtsam.Rot3.Quaternion(float(quat[3]), float(quat[0]), float(quat[1]), float(quat[2]))
+        p = r.toQuaternion().z()
+        title = 'True Quaternion z (GTSAM from State)'+' for agent '+str(a)
+
+    elif case == 38:
+        quat = Agent["State"][6:10]
+        r = gtsam.Rot3.Quaternion(float(quat[3]), float(quat[0]), float(quat[1]), float(quat[2]))
+        p = r.toQuaternion().w()
+        title = 'True Quaternion w (GTSAM from State)'+' for agent '+str(a)
+
+    elif case == 39:
+        state_estim = Agent["State_Estim"]
+        p = state_estim.rotation().toQuaternion().x()
+        title = 'Estimated Quaternion x'+' for agent '+str(a)
+
+    elif case == 40:
+        state_estim = Agent["State_Estim"]
+        p = state_estim.rotation().toQuaternion().y()
+        title = 'Estimated Quaternion y'+' for agent '+str(a)
+
+    elif case == 41:
+        state_estim = Agent["State_Estim"]
+        p = state_estim.rotation().toQuaternion().z()
+        title = 'Estimated Quaternion z'+' for agent '+str(a)
+
+    elif case == 42:
+        state_estim = Agent["State_Estim"]
+        p = state_estim.rotation().toQuaternion().w()
+        title = 'Estimated Quaternion w'+' for agent '+str(a)
 
     elif case == 12:
         p = Agent['Target_Estim'][6:9]
@@ -484,6 +531,8 @@ def plot_pose_graph_optimization(fig_name, Title, Case, A, Agents_History, num_i
     
     Args:
         sigma: Gaussian filter sigma (default 2). Use 0 to disable smoothing.
+        For quaternion component series, prefer sigma=0: smoothing each component
+        independently is not a valid rotation filter and can mimic large observation error.
     """
     # Set plotting cases
     c = len(Case)

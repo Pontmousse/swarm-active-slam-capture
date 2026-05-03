@@ -54,6 +54,8 @@ voxel_size = 0.01
 icp_threshold = 1.5
 scan_downsample_voxel_size = 0.01
 feature_noise_std = 0.0  # None => use Feature_Processing default
+dense_map_pose_source = "state_estim"  # state_estim, state_obs, true_state
+dense_map_pose_source_unc_tiny = "state_obs"
 
 # Post-optimization outlier rejection (Phase C)
 enable_outlier_rejection = True
@@ -114,6 +116,15 @@ kappa_seconds = 1.0  # cadence for communication/registration
 FGO_Param = False
 calculate_w_method = "w4"  # options: w1, w2, w3, w4
 low_pass_filter_coeff = 0.1
+# When unc is at or below this threshold, pose smoothing is bypassed (effective alpha=1: State_Estim = ISAM Pose3).
+# Near-noise runs otherwise accumulate large artificial drift because low-pass blends toward lagged State_Estim.
+pose_low_pass_disable_unc_threshold = 1e-4
+# In near-perfect/no-noise runs, use the simulator-provided target kinematics for map
+# propagation instead of differentiating sparse/optimized map points. This keeps static
+# targets static and moving targets on their true trajectory when the experiment is meant
+# to emulate perfect measurements.
+target_kinematics_truth_unc_threshold = 1e-4
+
 relinearize_threshold = 0.1
 relinearize_skip = 1
 

@@ -13,7 +13,6 @@ import numpy as np
 import open3d as o3d
 import config
 
-
 # Descriptor dimension (FPFH = 33, SHOT would be 352)
 DESCRIPTOR_DIM = getattr(config, 'DESCRIPTOR_DIM', 33)
 
@@ -135,7 +134,7 @@ def compute_features(FeatureSet, radius_normal=None, radius_feature=None):
             radius_normal = max(0.1, avg_nn_dist * 2.5)
         if radius_feature is None:
             radius_feature = max(0.2, avg_nn_dist * 4.0)
-    
+
     return compute_fpfh_features(FeatureSet, radius_normal, radius_feature, normalize=True)
 
 

@@ -131,6 +131,7 @@ def run_active_slam(
 
             if should_run_slam(simulation_frame, runner_config, last_slam_time):
                 latest_slam_feedback = run_slam_phase(ddfgo, slam_state, frame_buffer)
+
                 record_slam_feedback(slam_feedback_history, latest_slam_feedback)
                 frame_buffer.clear()
                 last_slam_time = simulation_frame["sim_time"]
