@@ -7,11 +7,16 @@ from pathlib import Path
 
 # Common simulation identity
 DT = 240
-N = 1
+N = 2
 D = 15
 object_name = "Orion_Capsule"
 
 stride = 0.1  # seconds per simulation step; controls SLAM frequency and sim time scaling
+
+# Online DDFGO++ only: target simulated seconds between decentralized comm attempts.
+# Converted to SLAM-update stride as every = max(1, floor(period / stride)).
+# Lower = more frequent (e.g. 0.05 with stride 0.1 => every SLAM update for debugging).
+online_decentralized_comm_period_seconds = 0.05
 
 # Checkpoint cadence (simulated seconds)
 # - SwarmCapture+ writes Excel + pickle histories when sim time crosses this interval.
@@ -30,6 +35,10 @@ def slam_checkpoint_every_updates(slam_period_seconds: float) -> int:
 # The Cube.obj asset is authored as a 0.2 m cube; this value controls
 # rendered animation size consistently across mapping/simulation scripts.
 VIS_CUBESAT_SIZE_M = 0.3
+
+# Offscreen mapping animations (Open3D look_at(center, eye, up)): shared fixed eye in world frame.
+# Both Animate_Single_Agent_Mapping_Offscreen.py and Animate_All_Agents_Mapping_Offscreen.py use this.
+animation_camera_eye_xyz = (-12.0, 3.0, 3.0)
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SWARMCAPTURE_DIR = PROJECT_ROOT / "SwarmCapture+"

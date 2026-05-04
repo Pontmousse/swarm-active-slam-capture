@@ -13,6 +13,7 @@ import glob
 import os
 from moviepy.editor import ImageSequenceClip
 import config
+import shared_config
 
 #############################################################################################
 # Visualization settings
@@ -21,6 +22,11 @@ show_target = False # show target real pcd
 show_agents = True # show agents bodies
 show_observations = False # show agent's of interest observed features at time step
 show_map = True # show agent's of interest map estimate at time step
+
+# Sparse map visualization (when show_map): two triangle-mesh sphere clouds —
+#   * Own landmarks: MapNghSet entry equals focal agent id → warm orange, full radius.
+#   * Neighbour-attributed landmarks: MapNghSet != id (features registered to another
+#     agent but present in this agent's map) → cool blue, smaller radius.
 
 
 #############################################################################################
@@ -95,6 +101,15 @@ def _spheres_from_points(points, radius, resolution):
     out.compute_vertex_normals()
     return out
 
+
+def animation_camera_look_at(k):
+    """Match all-agent offscreen framing: fixed eye from shared_config, center on target."""
+    camera_target = np.asarray(Target_History[k][:3], dtype=np.float64)
+    camera_position = np.asarray(shared_config.animation_camera_eye_xyz, dtype=np.float64)
+    camera_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    return camera_target, camera_position, camera_up
+
+
 def load_agent_pcd(id,i):
     Agents = Agents_History[i]
     Spacecraft = Agents[id-1]
@@ -104,9 +119,8 @@ def load_agent_pcd(id,i):
     agent_pcd.points = o3d.utility.Vector3dVector(Feat)
     return agent_pcd
 
-def load_agent_map(id,i):
-    Agents = Agents_History[i]
-    Spacecraft = Agents[id-1]
+def load_agent_map(id, frame_idx):
+    Spacecraft = Agents_History[frame_idx][id - 1]
     Map = _to_points_array(Spacecraft.get('MapSet', np.array([]).reshape(0, 3)))
     MapNgh = np.asarray(Spacecraft.get('MapNghSet', [])).reshape(-1)
 
@@ -114,19 +128,18 @@ def load_agent_map(id,i):
         MapNgh = np.full(len(Map), id, dtype=int)
 
     indices2remove = []
-    for i in range(len(MapNgh)):
-        ngh = MapNgh[i]
+    for j in range(len(MapNgh)):
+        ngh = MapNgh[j]
         if ngh != id:
-            indices2remove.append(i)
+            indices2remove.append(j)
 
     Points = [Map[j] for j in range(len(Map)) if j not in indices2remove]
     agent_map = o3d.geometry.PointCloud()
     agent_map.points = o3d.utility.Vector3dVector(Points)
     return agent_map
 
-def load_agent_neighbour_map(id,i):
-    Agents = Agents_History[i]
-    Spacecraft = Agents[id-1]
+def load_agent_neighbour_map(id, frame_idx):
+    Spacecraft = Agents_History[frame_idx][id - 1]
 
     MapNgh = np.asarray(Spacecraft.get('MapNghSet', [])).reshape(-1)
     Map = _to_points_array(Spacecraft.get('MapSet', np.array([]).reshape(0, 3)))
@@ -135,14 +148,37 @@ def load_agent_neighbour_map(id,i):
         MapNgh = np.full(len(Map), id, dtype=int)
 
     Points = []
-    for i in range(len(MapNgh)):
-        ngh = MapNgh[i]
+    for j in range(len(MapNgh)):
+        ngh = MapNgh[j]
         if ngh != id:
-            Points.append(Map[i])
-    
+            Points.append(Map[j])
+
     agent_ngh_map = o3d.geometry.PointCloud()
     agent_ngh_map.points = o3d.utility.Vector3dVector(Points)
     return agent_ngh_map
+
+
+def sparse_map_own_and_neighbour_counts(id_1based, frame_idx):
+    """
+    Count sparse map entries for focal agent id_1based at frame_idx:
+    own (MapNgh == id) vs neighbour-attributed (MapNgh != id), plus per-neighbour ID counts.
+    Neighbour IDs match MapNghSet semantics (agent index convention used in history).
+    """
+    Spacecraft = Agents_History[frame_idx][id_1based - 1]
+    Map = _to_points_array(Spacecraft.get('MapSet', np.array([]).reshape(0, 3)))
+    MapNgh = np.asarray(Spacecraft.get('MapNghSet', [])).reshape(-1)
+    n_map = len(Map)
+    if len(MapNgh) != len(Map):
+        MapNgh = np.full(len(Map), id_1based, dtype=int)
+    own_mask = MapNgh == id_1based
+    n_own = int(np.sum(own_mask))
+    n_neighbour = n_map - n_own
+    per_neighbour = {}
+    if n_neighbour > 0:
+        neigh_ids = MapNgh[~own_mask]
+        uniq, cnts = np.unique(neigh_ids, return_counts=True)
+        per_neighbour = {int(u): int(c) for u, c in zip(uniq, cnts)}
+    return n_own, n_neighbour, per_neighbour
 
 def load_agent_merged_map(id, i):
     Agents = Agents_History[i]
@@ -345,8 +381,12 @@ for k in range(iter):
     if config.animation_show_dense_map:
         agent_merged_map = load_agent_merged_map(id, k)
 
-    print('Number of map landmarks:  '+str(len(agent_map.points)))
-    # print('Geometric center of landmarks map:  '+str(np.mean(agent_map.points, axis=0)[0]))
+    n_own, n_ngh_sparse, ngh_by_agent = sparse_map_own_and_neighbour_counts(id, k)
+    print(
+        f'  [frame {k}] Sparse map spheres — own (orange): {n_own} | '
+        f'neighbour-attributed (blue): {n_ngh_sparse}'
+        + (f' | by neighbour agent id: {ngh_by_agent}' if ngh_by_agent else ' | (no neighbour-attributed landmarks; blue layer empty)')
+    )
 
     #########################
 
@@ -391,10 +431,7 @@ for k in range(iter):
 
     ############################################################################################################
 
-    # Set up the camera parameters manually
-    camera_position = [0, 5, 5]
-    camera_target = Target_History[k][:3]
-    camera_up = [0, 1, 0]
+    camera_target, camera_position, camera_up = animation_camera_look_at(k)
     vis.scene.camera.look_at(camera_target, camera_position, camera_up)
 
     # vis the scene

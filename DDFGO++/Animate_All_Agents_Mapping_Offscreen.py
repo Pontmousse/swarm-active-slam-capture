@@ -14,6 +14,7 @@ import math as m
 import os
 from moviepy.editor import ImageSequenceClip
 import config
+import shared_config
 
 #############################################################################################
 # Visualization settings
@@ -132,7 +133,9 @@ def load_agent_map(a,i):
 
 def load_agent_merged_map(a, i):
     Spacecraft = Agents_History[i][a]
-    pts = _to_points_array(Spacecraft.get('MergedMapSet', np.array([]).reshape(0, 3)))
+    pts = _to_points_array(Spacecraft.get('MergedMapSharedSet', np.array([]).reshape(0, 3)))
+    if len(pts) == 0:
+        pts = _to_points_array(Spacecraft.get('MergedMapSet', np.array([]).reshape(0, 3)))
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pts)
     if len(pts) > 0 and config.animation_dense_voxel_size and config.animation_dense_voxel_size > 0:
@@ -335,20 +338,8 @@ iter = int(m.floor(num_iter/frac))
 
 # Loop through frames
 for k in range(iter):
-    id = 1
     camera_target = Target_History[k][:3]
-
-
-    ######## Uncomment to fix camera at agent
-    # calculate target to one of the agents vector
-    tar2agent_vec = np.array(camera_target) - np.array(Agents_History[k][id-1]['State'][:3])
-    dis2agent = np.linalg.norm(tar2agent_vec)
-    tar2agent_vec = tar2agent_vec/dis2agent
-    camera_position = np.array(camera_target) + tar2agent_vec*1.3*dis2agent
-    
-    # Set up the camera parameters manually
-    camera_position = [-12,3,3]
-    
+    camera_position = np.asarray(shared_config.animation_camera_eye_xyz, dtype=np.float64)
 
     # calculate camera to target vector
     cam2tar_vec = np.array(camera_target) - np.array(camera_position)

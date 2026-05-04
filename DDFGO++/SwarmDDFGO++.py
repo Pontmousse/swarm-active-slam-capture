@@ -10,6 +10,7 @@ from gtsam import symbol_shorthand
 import pickle
 import random
 from dataclasses import dataclass
+import shared_config
 from helper import *
 from Custom_Factors import *
 from LandmarkRegistry import LandmarkRegistry
@@ -18,6 +19,7 @@ from map_merging import (
     store_scan_local,
     build_merged_map,
     compute_merged_map_error,
+    merge_voxel,
 )
 from notify_helper import notify
 import config
@@ -396,6 +398,19 @@ def initialize_slam_runtime(first_frame_or_histories, config_module=config, mode
     slam_state["cfg"] = cfg
     slam_state["config_module"] = config_module
     slam_state["runtime_obj"] = runtime
+    if mode == "online":
+        # Online SLAM advances i by SLAM updates; cadence comes from shared_config so it
+        # stays aligned with stride (sim scheduler), independent of batch kappa_seconds/dt.
+        _shared_cfg = getattr(config_module, "shared_config", shared_config)
+        _slam_period_s = float(getattr(_shared_cfg, "stride", runtime.dt))
+        if _slam_period_s <= 0.0:
+            _slam_period_s = runtime.dt
+        _comm_period_s = float(
+            getattr(_shared_cfg, "online_decentralized_comm_period_seconds", 1.0)
+        )
+        if _comm_period_s <= 0.0:
+            _comm_period_s = _slam_period_s
+        slam_state["every"] = max(1, int(np.floor(_comm_period_s / _slam_period_s)))
     return slam_state
 
 
@@ -521,6 +536,53 @@ def build_slam_feedback(slam_state):
 def step_slam(slam_state, simulation_frames):
     process_slam_update(slam_state, simulation_frames)
     return build_slam_feedback(slam_state)
+
+
+def _as_points_array(points):
+    if points is None:
+        return np.array([]).reshape(0, 3)
+    points = np.asarray(points)
+    if points.size == 0:
+        return np.array([]).reshape(0, 3)
+    return points.reshape(-1, 3)
+
+
+def _build_shared_dense_map(agents_history, agent_idx, frame_idx, voxel_size):
+    agent = agents_history[frame_idx][agent_idx]
+    point_sets = []
+    source_agents = []
+
+    local_pts = _as_points_array(agent.get("MergedMapSet", np.array([]).reshape(0, 3)))
+    if len(local_pts) > 0:
+        point_sets.append(local_pts)
+        source_agents.append(int(agent_idx))
+
+    for neighbor_idx in agent.get("CommSet", []):
+        neighbor_idx = int(neighbor_idx)
+        if neighbor_idx < 0 or neighbor_idx >= len(agents_history[frame_idx]):
+            continue
+        neighbor_pts = _as_points_array(
+            agents_history[frame_idx][neighbor_idx].get("MergedMapSet", np.array([]).reshape(0, 3))
+        )
+        if len(neighbor_pts) == 0 and frame_idx > 0:
+            neighbor_pts = _as_points_array(
+                agents_history[frame_idx - 1][neighbor_idx].get("MergedMapSet", np.array([]).reshape(0, 3))
+            )
+        if len(neighbor_pts) > 0:
+            point_sets.append(neighbor_pts)
+            source_agents.append(neighbor_idx)
+
+    if point_sets:
+        merged = np.vstack(point_sets)
+        if voxel_size is not None and voxel_size > 0:
+            merged = merge_voxel(merged, voxel_size)
+    else:
+        merged = np.array([]).reshape(0, 3)
+
+    return {
+        "MergedMapSharedSet": merged,
+        "MergedMapSharedSourceSet": np.array(source_agents, dtype=int),
+    }
 
 
 
@@ -1099,12 +1161,28 @@ def _run_slam_timestep_body(slam_state):
                             f"{qn_namespace} vs {feature_id_namespace_policy}"
                         )
                     continue
-                Qll = min(Ql, len(Agents_History[i][qn]['FeatureIdxSet']))
+                qn_agent = Agents_History[i][qn]
+                nbr_idx = np.asarray(qn_agent.get("FeatureIdxSet", []), dtype=int).reshape(-1)
+                nbr_fs = np.asarray(qn_agent.get("FeatureSet", np.array([]).reshape(0, 3)))
+                if nbr_fs.size == 0:
+                    nbr_feat = np.array([]).reshape(0, 3)
+                else:
+                    nbr_feat = nbr_fs.reshape(-1, 3)
+                if len(nbr_idx) == 0 or len(nbr_feat) == 0 or len(nbr_idx) != len(nbr_feat):
+                    if Verbose_map:
+                        print(
+                            f"Skipping decentralized pull from agent {qn} for agent {a} at i={i}: "
+                            f"no neighbor feature buffer yet (async ordering or empty LandSet)."
+                        )
+                    continue
+                Qll = min(Ql, len(nbr_idx))
+                if Qll <= 0:
+                    continue
 
-                selectionL = random.sample(range(0, len(Agents_History[i][qn]['FeatureIdxSet'])), Qll)
+                selectionL = random.sample(range(0, len(nbr_idx)), Qll)
                 for ql in selectionL:
-                    feature = Agents_History[i][qn]['FeatureSet'][ql]
-                    descriptor = int(Agents_History[i][qn]['FeatureIdxSet'][ql])
+                    feature = nbr_feat[ql]
+                    descriptor = int(nbr_idx[ql])
 
                     if descriptor in inserted_landmarks:
                         continue
@@ -1419,6 +1497,45 @@ def _run_slam_timestep_body(slam_state):
         if Verbose_map: print(f'Map size of agent {a}: {len(Agents_History[i][a]["MapSet"])}')
 
 
+        # Provisional target state for dense-map propagation. The COM below may be
+        # refined from the dense map, while sparse correspondences still drive V/W.
+        Agents_History[i][a]['Target_Estim'] = np.concatenate((
+            np.array(com, dtype=np.float64),
+            np.array(vel, dtype=np.float64),
+            np.array(ang_vel, dtype=np.float64),
+        ))
+
+        #######################################################################
+        # Dense map (Phase B) - optional via map_mode
+        #######################################################################
+        if map_mode in ("dense", "hybrid"):
+            _dense_map_pose_source = getattr(config, "dense_map_pose_source", "state_estim")
+            _dense_map_pose_source_unc_tiny = getattr(config, "dense_map_pose_source_unc_tiny", None)
+            if _dense_map_pose_source_unc_tiny is not None and float(config.unc) <= float(
+                getattr(config, "pose_low_pass_disable_unc_threshold", 0.0)
+            ):
+                _dense_map_pose_source = _dense_map_pose_source_unc_tiny
+            Agents_History[i][a].update(
+                build_merged_map(
+                    Agents_History,
+                    a,
+                    i,
+                    sw,
+                    step_size,
+                    voxel_size,
+                    pose_source=_dense_map_pose_source,
+                )
+            )
+            Agents_History[i][a].update(_build_shared_dense_map(Agents_History, a, i, voxel_size))
+            merged_pts = Agents_History[i][a].get('MergedMapSet', np.array([]).reshape(0, 3))
+            merged_pcd = o3d.geometry.PointCloud()
+            merged_pcd.points = o3d.utility.Vector3dVector(merged_pts)
+            target_pcd = o3d.geometry.PointCloud()
+            target_pcd.points = o3d.utility.Vector3dVector(Target_Point_Cloud_History[i])
+            Agents_History[i][a]['MergedMap_Error'] = compute_merged_map_error(
+                merged_pcd, target_pcd, voxel_size, icp_threshold
+            )
+
 
         #######################################################################
         #######################################################################
@@ -1436,7 +1553,17 @@ def _run_slam_timestep_body(slam_state):
         # Agents_History[i][a]['Target_COM'] = calculate_com(Target_Point_Cloud_History[i])
 
         ##########
-        if Points:
+        dense_com_points = _as_points_array(
+            Agents_History[i][a].get('MergedMapSharedSet', np.array([]).reshape(0, 3))
+        )
+        if len(dense_com_points) == 0:
+            dense_com_points = _as_points_array(
+                Agents_History[i][a].get('MergedMapSet', np.array([]).reshape(0, 3))
+            )
+
+        if len(dense_com_points) > 0:
+            Agents_History[i][a]['Target_COM'] = calculate_com(dense_com_points)
+        elif Points:
             Agents_History[i][a]['Target_COM'] = calculate_com(Points)
         else:
             Agents_History[i][a]['Target_COM'] = Agents_History[i-1][a]['Target_COM']
@@ -1530,36 +1657,6 @@ def _run_slam_timestep_body(slam_state):
         ))
 
         #######################################################################
-        # Dense map (Phase B) - optional via map_mode
-        #######################################################################
-        if map_mode in ("dense", "hybrid"):
-            _dense_map_pose_source = getattr(config, "dense_map_pose_source", "state_estim")
-            _dense_map_pose_source_unc_tiny = getattr(config, "dense_map_pose_source_unc_tiny", None)
-            if _dense_map_pose_source_unc_tiny is not None and float(config.unc) <= float(
-                getattr(config, "pose_low_pass_disable_unc_threshold", 0.0)
-            ):
-                _dense_map_pose_source = _dense_map_pose_source_unc_tiny
-            Agents_History[i][a].update(
-                build_merged_map(
-                    Agents_History,
-                    a,
-                    i,
-                    sw,
-                    step_size,
-                    voxel_size,
-                    pose_source=_dense_map_pose_source,
-                )
-            )
-            merged_pts = Agents_History[i][a].get('MergedMapSet', np.array([]).reshape(0, 3))
-            merged_pcd = o3d.geometry.PointCloud()
-            merged_pcd.points = o3d.utility.Vector3dVector(merged_pts)
-            target_pcd = o3d.geometry.PointCloud()
-            target_pcd.points = o3d.utility.Vector3dVector(Target_Point_Cloud_History[i])
-            Agents_History[i][a]['MergedMap_Error'] = compute_merged_map_error(
-                merged_pcd, target_pcd, voxel_size, icp_threshold
-            )
-
-        #######################################################################
         #######################################################################
         # Calculate error
         #######################################################################
@@ -1572,6 +1669,12 @@ def _run_slam_timestep_body(slam_state):
 
         # Calculate the elapsed time for this iteration for this agent
         Agents_History[i][a]['CPU_time'] = time.time() - start_time_iteration_agent
+
+    if map_mode in ("dense", "hybrid"):
+        for a_shared in range(N):
+            Agents_History[i][a_shared].update(
+                _build_shared_dense_map(Agents_History, a_shared, i, voxel_size)
+            )
 
     KeyFrames_Hist.append(frame)
     KeyFramesIdx_Hist.append(frame_idx)        
