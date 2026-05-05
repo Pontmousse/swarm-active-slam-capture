@@ -491,4 +491,149 @@ def chw_force(Spacecraft, altitude, cancel_chw):
 
     
     
+   
+# #####################################################################################################################
+# #####################################################################################################################
+# #####################################################################################################################
+# #####################################################################################################################
+# #####################################################################################################################
+# #####################################################################################################################
+# #####################################################################################################################
+# #####################################################################################################################
+
+# def Search(Spacecraft, Agents, xbox, ybox, zbox, Rcol, cond_viz):
+#     # State extraction
+#     x = Spacecraft["State"][0]
+#     y = Spacecraft["State"][1]
+#     z = Spacecraft["State"][2]
+#     r = np.array([x,y,z])
+
+#     vx = Spacecraft["State"][3]
+#     vy = Spacecraft["State"][4]
+#     vz = Spacecraft["State"][5]
+#     rdot = np.array([vx,vy,vz])
+
+#     q = Spacecraft["State"][6:10]
+
+#     w1 = Spacecraft["State"][10]
+#     w2 = Spacecraft["State"][11]
+#     w3 = Spacecraft["State"][12]
+#     ang_vel = np.array([w1,w2,w3])
     
+#     #####################################
+#     ######### Bouncing maneuver #########
+#     # Hyperparameter
+#     k = 500  # N of Force
+#     def Frnd(k):
+#         Fr = k/4 * random.uniform(-1,1)
+#         return Fr
+    
+#     # Firing the bouncing thrusts for hitting x boundary
+#     if x > xbox:
+#         Fx = np.array([-k, Frnd(k), Frnd(k)])
+#     elif x < -xbox:
+#         Fx = np.array([k, Frnd(k), Frnd(k)])
+#     else:
+#         Fx = np.array([0, 0, 0])
+    
+#     # Firing the bouncing thrusts for hitting y boundary
+#     if y > ybox:
+#         Fy = np.array([Frnd(k), -k, Frnd(k)])
+#     elif y < -ybox:
+#         Fy = np.array([Frnd(k), k, Frnd(k)])
+#     else:
+#         Fy = np.array([0, 0, 0])
+
+#     # Firing the bouncing thrusts for hitting z boundary
+#     if z > zbox:
+#         Fz = np.array([Frnd(k), Frnd(k), -k])
+#     elif z < -zbox:
+#         Fz = np.array([Frnd(k), Frnd(k), k])
+#     else:
+#         Fz = np.array([0, 0, 0])
+    
+#     F_bnc = Fx + Fy + Fz # Addition not Concatenation
+
+#     ########################################
+#     ######### Aggregation maneuver #########
+#     dir = Spacecraft['LCD']
+#     Kagg = 1000
+#     vel_dir = rdot / np.linalg.norm(rdot)
+    
+#      # Debug
+#     # print('\n')
+#     # print("rdot:", rdot)
+#     # print("vel_dir", vel_dir)
+#     # print("LCD dir", dir)
+
+#     if len(dir) == 0:
+#         F_agg = np.array([0, 0, 0])
+#     else:
+#         F_agg = -Kagg * (vel_dir - dir)
+    
+#     # Debug
+#     # print('\n')
+#     # print("F_agg:", F_agg)
+
+#     ######################################
+#     ######### Collision maneuver #########
+#     # Hyperparameter
+#     ga = 10  # Collision avoidance strength
+#     eps = 0.0001; # for numerical stability when dividing by 0 or "np.finfo(float).eps"
+#     Ngh = Spacecraft['CollSet']
+#     Nc = len(Ngh)
+    
+#     # No Neighbors
+#     if Nc == 0:
+#         F_col = np.array([0, 0, 0])
+#     else:
+#         Fx = 0
+#         Fy = 0
+#         Fz = 0
+#         for i in range(Nc):
+#             xp = Agents[Ngh[i]]["State"][0]
+#             yp = Agents[Ngh[i]]["State"][1]
+#             zp = Agents[Ngh[i]]["State"][2]
+#             rp = np.array([xp, yp, zp])
+#             Nr = np.linalg.norm(r - rp)
+            
+#             # X direction
+#             Xd = (x ** 2) / (x + eps) - (xp ** 2) / (xp + eps)
+#             numer = abs(x - xp) * (1 / Nr - 1 / Rcol) * (x - xp + Xd)
+#             denom = Nr ** 3 * np.sqrt((x - xp) * Xd)+eps
+#             Fx = Fx + (ga / 2) * (numer / denom)
+            
+#             # Y direction
+#             Yd = (y ** 2) / (y + eps) - (yp ** 2) / (yp + eps)
+#             numer = abs(y - yp) * (1 / Nr - 1 / Rcol) * (y - yp + Yd)
+#             denom = Nr ** 3 * np.sqrt((y - yp) * Yd)+eps
+#             Fy = Fy + (ga / 2) * (numer / denom)
+
+#             # Z direction
+#             Zd = (z ** 2) / (z + eps) - (zp ** 2) / (zp + eps)
+#             numer = abs(z - zp) * (1 / Nr - 1 / Rcol) * (z - zp + Zd)
+#             denom = Nr ** 3 * np.sqrt((z - zp) * Zd)+eps
+#             Fz = Fz + (ga / 2) * (numer / denom)
+        
+#         F_col = np.array([Fx, Fy, Fz])
+    
+    
+#     Frc = F_bnc + F_agg + F_col
+    
+#     #####################################
+#     ######### Attitude Pointing #########
+#     ort = Spacecraft["LCD_Frame"]
+#     Trq = point_agent(r,q,ang_vel,ort, cond_viz)
+
+    
+#     u = np.concatenate((Frc,Trq))
+
+#     # Debug
+#     # print('\n')
+#     # print("Force", F)
+#     # print("Torque", Trq)
+#     # print('u', u)
+#     # print('\n')
+
+#     return u
+ 
