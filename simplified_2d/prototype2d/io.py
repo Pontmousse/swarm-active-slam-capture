@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from .model import (
     AttachmentPoint,
@@ -9,6 +9,28 @@ from .model import (
     TargetDefinition,
     TargetPoint,
 )
+
+
+def build_dense_boundary_topology(
+    dense_points: List[TargetPoint],
+    closed: bool,
+) -> Tuple[List[int], Dict[int, List[int]]]:
+    """
+    Neighbors along dense polyline file order; optionally close last-to-first.
+    """
+    ordered = [pt.id for pt in dense_points]
+    adj: Dict[int, List[int]] = {pid: [] for pid in ordered}
+    for i in range(len(ordered) - 1):
+        a, b = ordered[i], ordered[i + 1]
+        adj[a].append(b)
+        adj[b].append(a)
+    if closed and len(ordered) >= 2:
+        a, b = ordered[-1], ordered[0]
+        adj[a].append(b)
+        adj[b].append(a)
+    for pid in adj:
+        adj[pid] = sorted(set(adj[pid]))
+    return ordered, adj
 
 
 def load_config(path: str) -> ExperimentConfig:
@@ -22,7 +44,7 @@ def save_config(path: str, config: ExperimentConfig) -> None:
         json.dump(config.to_dict(), handle, indent=2)
 
 
-def load_target_definition(path: str) -> TargetDefinition:
+def load_target_definition(path: str, dense_boundary_closed: bool = True) -> TargetDefinition:
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
 
@@ -46,11 +68,15 @@ def load_target_definition(path: str) -> TargetDefinition:
         for ap in data.get("attachment_points", [])
     ]
 
+    ordered, adj = build_dense_boundary_topology(dense_points, closed=dense_boundary_closed)
+
     return TargetDefinition(
         name=data.get("name", "target"),
         contour_points=contour_points,
         dense_points=dense_points,
         attachment_points=attachment_points,
+        dense_point_ids_ordered=ordered,
+        dense_adjacency=adj,
     )
 
 

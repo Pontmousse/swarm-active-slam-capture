@@ -1,0 +1,4 @@
+# Optional: OpenAI backend + `.env` support for API keys at repo root
+openai>=1.0.0
+openai-agents
+python-dotenv>=1.0.0

@@ -1,0 +1,10 @@
+{
+  "batch_name": "phase4_compare",
+  "description": "Two-policy parity comparison: FSM versus Random decision backend; vary rng_seed only.",
+  "base_config": "simplified_2d/prototype2d/config.phase4.json",
+  "batch_output_dir": "simplified_2d/prototype2d/results/phase4_batch_compare",
+  "matrix": {
+    "decision_backend": ["fsm", "random"],
+    "rng_seed": [0, 1, 2]
+  }
+}

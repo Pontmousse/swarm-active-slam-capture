@@ -24,7 +24,12 @@ from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .io import load_target_definition, save_target_definition, validate_target_definition
+from .io import (
+    build_dense_boundary_topology,
+    load_target_definition,
+    save_target_definition,
+    validate_target_definition,
+)
 from .model import AttachmentPoint, TargetDefinition, TargetPoint
 
 Point = Tuple[float, float]
@@ -339,11 +344,14 @@ def build_target_definition_from_sketched_lines(
         indexed_segments,
         edge_stride=attachment_edge_stride,
     )
+    ordered, adj = build_dense_boundary_topology(dense_points, closed=True)
     return TargetDefinition(
         name=name,
         contour_points=contour_points,
         dense_points=dense_points,
         attachment_points=attachment_points,
+        dense_point_ids_ordered=ordered,
+        dense_adjacency=adj,
     )
 
 
@@ -409,11 +417,14 @@ def build_target_definition_from_polygon(
         TargetPoint(id=i, x=pt[0], y=pt[1], normal=None) for i, pt in enumerate(contour_ring)
     ]
     attachment_points = build_attachments_for_contour(contour_ring, dense_points)
+    ordered, adj = build_dense_boundary_topology(dense_points, closed=True)
     return TargetDefinition(
         name=name,
         contour_points=contour_points,
         dense_points=dense_points,
         attachment_points=attachment_points,
+        dense_point_ids_ordered=ordered,
+        dense_adjacency=adj,
     )
 
 

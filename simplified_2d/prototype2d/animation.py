@@ -5,6 +5,7 @@ Usage:
   python -m simplified_2d.prototype2d.animation --results path/to/results --target path/to/target.json
   python -m simplified_2d.prototype2d.animation --results path/to/results --target path/to/target.json --margin 0.15
   python -m simplified_2d.prototype2d.animation ... --highlight-agent 1   # 1 = first agent in history list
+  python -m simplified_2d.prototype2d.animation ... --out run.mp4 --fps 20
 
 Requires ``target_history.pkl`` in ``results_dir`` so the moving target aligns with simulation (auto-saved by the simulator).
 """
@@ -115,6 +116,9 @@ def animate_run(
     interval_ms: int,
     margin_frac: float = 0.12,
     highlight_agent: Optional[int] = None,
+    out_path: Optional[str] = None,
+    fps: int = 20,
+    dpi: int = 140,
 ) -> None:
     agents_history = _load_history(results_dir, "agents_history.pkl")
     attachment_history = _load_history(results_dir, "attachment_points.pkl")
@@ -165,6 +169,20 @@ def animate_run(
     target_states: List[List[float]] = []
     if target_history is not None:
         target_states = [row["state"] for row in target_history]
+    # Heading glyph length scales with viewport to stay visible across scenes.
+    heading_len = 0.025 * max(xmax - xmin, ymax - ymin)
+
+    def _draw_heading(ax_obj, x: float, y: float, theta: float, color: str, lw: float, z: int) -> None:
+        dx = heading_len * np.cos(theta)
+        dy = heading_len * np.sin(theta)
+        ax_obj.plot(
+            [x, x + dx],
+            [y, y + dy],
+            color=color,
+            linewidth=lw,
+            solid_capstyle="round",
+            zorder=z,
+        )
 
     def update(frame):
         ax.clear()
@@ -190,8 +208,42 @@ def animate_run(
                 label=f"agent {highlight_agent} (highlight)",
                 zorder=6,
             )
+            # Headings for non-highlight agents.
+            for i, a in enumerate(agents):
+                if i == highlight_idx:
+                    continue
+                _draw_heading(
+                    ax,
+                    float(a["state"][0]),
+                    float(a["state"][1]),
+                    float(a["state"][2]),
+                    color="black",
+                    lw=1.1,
+                    z=5,
+                )
+            # Heading for highlighted agent.
+            ah = agents[highlight_idx]
+            _draw_heading(
+                ax,
+                float(ah["state"][0]),
+                float(ah["state"][1]),
+                float(ah["state"][2]),
+                color="tab:orange",
+                lw=2.0,
+                z=7,
+            )
         else:
             ax.scatter(all_x, all_y, c="black", s=36, label="agents", zorder=4)
+            for a in agents:
+                _draw_heading(
+                    ax,
+                    float(a["state"][0]),
+                    float(a["state"][1]),
+                    float(a["state"][2]),
+                    color="black",
+                    lw=1.1,
+                    z=5,
+                )
 
         attachments = attachment_history[frame]
         if attachments:
@@ -310,6 +362,25 @@ def animate_run(
         interval=interval_ms,
         repeat=False,
     )
+    if out_path:
+        ext = os.path.splitext(out_path)[1].lower()
+        try:
+            if ext == ".gif":
+                writer = animation.PillowWriter(fps=fps)
+            else:
+                # Default to ffmpeg for mp4/other video extensions.
+                writer = animation.FFMpegWriter(fps=fps)
+            ani.save(out_path, writer=writer, dpi=dpi)
+            print(f"[animation] saved: {out_path}")
+        except Exception as exc:
+            raise SystemExit(
+                f"[animation] failed to save '{out_path}': {exc}. "
+                "For mp4, ensure ffmpeg is installed. For gif, try a .gif extension.",
+            )
+        finally:
+            plt.close(fig)
+        return
+
     plt.show()
 
 
@@ -331,6 +402,13 @@ def main() -> None:
         metavar="N",
         help="1-based index into the per-frame agent list: draw that agent as a square and overlay its known landmark map (darker cyan). Omit for no highlight.",
     )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Optional output animation path (e.g., run.mp4 or run.gif). If omitted, opens interactive viewer.",
+    )
+    parser.add_argument("--fps", type=int, default=20, help="Export frames-per-second when --out is set.")
+    parser.add_argument("--dpi", type=int, default=140, help="Export DPI when --out is set.")
     args = parser.parse_args()
     animate_run(
         args.results,
@@ -338,6 +416,9 @@ def main() -> None:
         args.interval,
         margin_frac=args.margin,
         highlight_agent=args.highlight_agent,
+        out_path=args.out,
+        fps=args.fps,
+        dpi=args.dpi,
     )
 
 
