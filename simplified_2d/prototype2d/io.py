@@ -36,6 +36,13 @@ def build_dense_boundary_topology(
 def load_config(path: str) -> ExperimentConfig:
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
+    # Backward/forward compatibility:
+    # - new key: "llm"
+    # - legacy key: "decision_backend"
+    if "llm" in data and "decision_backend" not in data:
+        data["decision_backend"] = data["llm"]
+    if "decision_backend" in data and "llm" not in data:
+        data["llm"] = data["decision_backend"]
     return ExperimentConfig(**data)
 
 

@@ -228,6 +228,45 @@ def _advance_agent(agent: Agent, force: np.ndarray, torque: float, dt: float) ->
     agent.state[2] += agent.state[5] * dt
 
 
+def _write_history_snapshots(
+    results_dir: str,
+    agents_history: List[List[Dict]],
+    target_history: List[Dict],
+    attachment_history: List[List[Dict]],
+    metrics_history: List[Dict],
+    messages_history: List[Dict],
+    prompt_traces: List[Dict],
+    *,
+    current_time: Optional[float] = None,
+    step: Optional[int] = None,
+    total_steps: Optional[int] = None,
+    reason: str = "periodic",
+) -> None:
+    with open(os.path.join(results_dir, "agents_history.pkl"), "wb") as handle:
+        pickle.dump(agents_history, handle)
+    with open(os.path.join(results_dir, "target_history.pkl"), "wb") as handle:
+        pickle.dump(target_history, handle)
+    with open(os.path.join(results_dir, "attachment_points.pkl"), "wb") as handle:
+        pickle.dump(attachment_history, handle)
+    with open(os.path.join(results_dir, "metrics_history.pkl"), "wb") as handle:
+        pickle.dump(metrics_history, handle)
+    with open(os.path.join(results_dir, "messages_history.pkl"), "wb") as handle:
+        pickle.dump(messages_history, handle)
+    with open(os.path.join(results_dir, "prompt_traces.pkl"), "wb") as handle:
+        pickle.dump(prompt_traces, handle)
+    if current_time is not None and step is not None and total_steps is not None:
+        print(
+            f"[snap] {reason} t={current_time:5.2f}s step={step:4d}/{total_steps} "
+            f"rows={len(metrics_history)}",
+            flush=True,
+        )
+    else:
+        print(
+            f"[snap] {reason} wrote snapshot files rows={len(metrics_history)}",
+            flush=True,
+        )
+
+
 def run_simulation(config_path: str) -> str:
     maybe_load_dotenv()
     config = load_config(config_path)
@@ -310,6 +349,8 @@ def run_simulation(config_path: str) -> str:
     total_decision_latency_sec = 0.0
     total_llm_calls = 0
     total_steps = int(np.floor(config.duration / config.dt))
+    periodic_snapshot_writes = 10
+    snapshot_interval_steps = max(1, total_steps // periodic_snapshot_writes)
     # log_interval_steps = max(1, int(round(1.0 / max(config.dt, 1e-6))))
     log_interval_steps = 10 * config.dt
     print(
@@ -734,19 +775,37 @@ def run_simulation(config_path: str) -> str:
                 f"m={modes_compact} dec={decision_calls_step} llm={llm_calls_step}",
                 flush=True,
             )
+        if step > 0 and (
+            step == total_steps
+            or step % snapshot_interval_steps == 0
+        ):
+            _write_history_snapshots(
+                results_dir,
+                agents_history,
+                target_history,
+                attachment_history,
+                metrics_history,
+                messages_history,
+                prompt_traces,
+                current_time=float(current_time),
+                step=step,
+                total_steps=total_steps,
+                reason="periodic",
+            )
 
-    with open(os.path.join(results_dir, "agents_history.pkl"), "wb") as handle:
-        pickle.dump(agents_history, handle)
-    with open(os.path.join(results_dir, "target_history.pkl"), "wb") as handle:
-        pickle.dump(target_history, handle)
-    with open(os.path.join(results_dir, "attachment_points.pkl"), "wb") as handle:
-        pickle.dump(attachment_history, handle)
-    with open(os.path.join(results_dir, "metrics_history.pkl"), "wb") as handle:
-        pickle.dump(metrics_history, handle)
-    with open(os.path.join(results_dir, "messages_history.pkl"), "wb") as handle:
-        pickle.dump(messages_history, handle)
-    with open(os.path.join(results_dir, "prompt_traces.pkl"), "wb") as handle:
-        pickle.dump(prompt_traces, handle)
+    _write_history_snapshots(
+        results_dir,
+        agents_history,
+        target_history,
+        attachment_history,
+        metrics_history,
+        messages_history,
+        prompt_traces,
+        current_time=float(total_steps * config.dt),
+        step=total_steps,
+        total_steps=total_steps,
+        reason="final",
+    )
 
     selected_agent = int(np.random.default_rng(rng_seed_int + 991).choice([a.id for a in agents]))
     generated_docs = export_from_results_dir(results_dir, agent_id=selected_agent)

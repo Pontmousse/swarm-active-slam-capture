@@ -64,6 +64,8 @@ class ExperimentConfig:
     dock_max_rel_speed: float = 1.5
     dock_heading_dot_threshold: float = 0.85
     dock_fallback_behavior: str = "capture"
+    # Preferred config key for backend selection; aliases to decision_backend.
+    llm: Optional[str] = None
     decision_backend: str = "fsm"
     decision_period: float = 1.0
     openai_model: str = "gpt-4o-mini"

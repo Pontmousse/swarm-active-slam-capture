@@ -1,0 +1,49 @@
+{
+  "results_dir": "../results/example_run",
+  "save_dir": null,
+  "show": true,
+  "subplot_layout": "vertical",
+  "time_range": null,
+  "highlight_agent_one_based": null,
+  "_doc": [
+    "Copy to telemetry.json and set results_dir to your run folder (relative paths → this JSON directory).",
+    "time_range [t0, t1]: seconds inclusive; omit or null for full run.",
+    "Agent fields: map_frontier_length, map_size, land_set_length, fuel_consumed, behavior_aggressiveness, ...",
+    "Use aggregate: mean on agents series to average the listed agents.",
+    "Per-figure subplot_layout overrides: set figure.subplot_layout to horizontal | vertical"
+  ],
+  "figures": [
+    {
+      "id": "frontier_comparison",
+      "title": "Frontier & map telemetry",
+      "filename": "frontier_combo",
+      "figsize": [10, 6],
+      "panels": [
+        {
+          "title": "Swarm-level frontier",
+          "y_label": "points",
+          "series": [
+            { "source": "metrics", "key": "frontier_size_mean", "label": "mean len(frontier)" },
+            {
+              "source": "metrics",
+              "key": "global_frontier_union_count",
+              "label": "union frontier pts"
+            }
+          ]
+        },
+        {
+          "title": "Per-agent frontier length",
+          "y_label": "len(map_frontier)",
+          "series": [
+            {
+              "source": "agents",
+              "field": "map_frontier_length",
+              "agents": [0, 1],
+              "labels": { "0": "a0", "1": "a1" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

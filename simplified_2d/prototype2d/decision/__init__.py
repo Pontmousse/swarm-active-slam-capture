@@ -12,12 +12,20 @@ __all__ = [
     "RandomBackend",
     "OpenAIBackend",
     "build_decision_snapshot",
+    "resolve_backend_name",
     "make_backend",
 ]
 
 
+def resolve_backend_name(config) -> str:
+    legacy_name = getattr(config, "decision_backend", None)
+    llm_name = getattr(config, "llm", None)
+    chosen = llm_name if llm_name is not None else legacy_name
+    return (chosen or "fsm").lower()
+
+
 def make_backend(config) -> DecisionBackend:
-    name = (getattr(config, "decision_backend", "fsm") or "fsm").lower()
+    name = resolve_backend_name(config)
     if name == "random":
         return RandomBackend(config)
     if name == "openai":

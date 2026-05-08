@@ -5,6 +5,7 @@ Usage:
   python -m simplified_2d.prototype2d.animation --results path/to/results --target path/to/target.json
   python -m simplified_2d.prototype2d.animation --results path/to/results --target path/to/target.json --margin 0.15
   python -m simplified_2d.prototype2d.animation ... --highlight-agent 1   # 1 = first agent in history list
+  python -m simplified_2d.prototype2d.animation ... --show-agent-ids     # superscript id on each agent (same # as --highlight-agent)
   python -m simplified_2d.prototype2d.animation ... --speed 2.0            # 2x faster playback
   python -m simplified_2d.prototype2d.animation ... --out run.mp4 --fps 20
 
@@ -50,6 +51,43 @@ def _dense_id_to_xy_world(dense_world: List[Dict]) -> Dict[int, Tuple[float, flo
 def _dense_id_to_xy_body(dense_dicts: List[Dict]) -> Dict[int, Tuple[float, float]]:
     """Body-frame dense positions when target motion history is unavailable."""
     return {int(d["id"]): (float(d["x"]), float(d["y"])) for d in dense_dicts}
+
+
+_SUP_DIGITS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def _agent_label_superscript(one_based_index: int) -> str:
+    """Small superscript-style label (Unicode); matches --highlight-agent numbering."""
+    return str(one_based_index).translate(_SUP_DIGITS)
+
+
+def _scatter_highlight_frontier(
+    ax_obj,
+    agent_h: Dict,
+    id_to_xy: Dict[int, Tuple[float, float]],
+    highlight_one_based: int,
+) -> None:
+    frontier_ids = agent_h.get("map_frontier") or []
+    fx: List[float] = []
+    fy: List[float] = []
+    for pid in frontier_ids:
+        pt = id_to_xy.get(int(pid))
+        if pt is not None:
+            fx.append(pt[0])
+            fy.append(pt[1])
+    if not fx:
+        return
+    ax_obj.scatter(
+        fx,
+        fy,
+        c="#c926d6",
+        edgecolors="black",
+        linewidths=0.5,
+        s=26,
+        marker="o",
+        label=f"agent {highlight_one_based} frontier",
+        zorder=12,
+    )
 
 
 def _compute_fixed_bounds(
@@ -117,6 +155,7 @@ def animate_run(
     interval_ms: int,
     margin_frac: float = 0.12,
     highlight_agent: Optional[int] = None,
+    show_agent_ids: bool = False,
     out_path: Optional[str] = None,
     fps: int = 20,
     dpi: int = 140,
@@ -263,13 +302,30 @@ def animate_run(
                     z=5,
                 )
 
+        if show_agent_ids:
+            for i, a in enumerate(agents):
+                x = float(a["state"][0])
+                y = float(a["state"][1])
+                col = "tab:orange" if highlight_idx == i else "black"
+                ax.annotate(
+                    _agent_label_superscript(i + 1),
+                    (x, y),
+                    xytext=(4, 4),
+                    textcoords="offset points",
+                    ha="left",
+                    va="bottom",
+                    fontsize=9,
+                    color=col,
+                    zorder=9,
+                )
+
         attachments = attachment_history[frame]
         if attachments:
             ax.scatter(
                 [ap["pos"][0] for ap in attachments],
                 [ap["pos"][1] for ap in attachments],
                 c="tab:red",
-                s=52,
+                s=34,
                 label="attachment pts",
                 zorder=5,
             )
@@ -309,6 +365,7 @@ def animate_run(
                             label=f"agent {highlight_agent} map",
                             zorder=3,
                         )
+                    _scatter_highlight_frontier(ax, agent_h, id_to_xy, highlight_agent)
             if contour_dicts and len(contour_dicts) >= 3:
                 world_contour = _target_points_world(ts, contour_dicts)
                 contour_xy = np.array([[float(p["pos"][0]), float(p["pos"][1])] for p in world_contour])
@@ -365,6 +422,7 @@ def animate_run(
                             label=f"agent {highlight_agent} map",
                             zorder=3,
                         )
+                    _scatter_highlight_frontier(ax, agent_h, id_to_xy, highlight_agent)
 
         ax.set_xlim(xlim)
         ax.set_ylim(ylim)
@@ -425,6 +483,11 @@ def main() -> None:
         help="1-based index into the per-frame agent list: draw that agent as a square and overlay its known landmark map (darker cyan). Omit for no highlight.",
     )
     parser.add_argument(
+        "--show-agent-ids",
+        action="store_true",
+        help="Draw a small superscript next to each agent (1…N); same numbering as --highlight-agent.",
+    )
+    parser.add_argument(
         "--out",
         default=None,
         help="Optional output animation path (e.g., run.mp4 or run.gif). If omitted, opens interactive viewer.",
@@ -444,6 +507,7 @@ def main() -> None:
         args.interval,
         margin_frac=args.margin,
         highlight_agent=args.highlight_agent,
+        show_agent_ids=args.show_agent_ids,
         out_path=args.out,
         fps=args.fps,
         dpi=args.dpi,
