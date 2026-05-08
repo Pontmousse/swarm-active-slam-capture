@@ -5,6 +5,7 @@ Usage:
   python -m simplified_2d.prototype2d.animation --results path/to/results --target path/to/target.json
   python -m simplified_2d.prototype2d.animation --results path/to/results --target path/to/target.json --margin 0.15
   python -m simplified_2d.prototype2d.animation ... --highlight-agent 1   # 1 = first agent in history list
+  python -m simplified_2d.prototype2d.animation ... --speed 2.0            # 2x faster playback
   python -m simplified_2d.prototype2d.animation ... --out run.mp4 --fps 20
 
 Requires ``target_history.pkl`` in ``results_dir`` so the moving target aligns with simulation (auto-saved by the simulator).
@@ -119,7 +120,24 @@ def animate_run(
     out_path: Optional[str] = None,
     fps: int = 20,
     dpi: int = 140,
+    speed: float = 1.0,
 ) -> None:
+    speed = max(float(speed), 1e-6)
+    # Speed semantics:
+    # - speed >= 1: accelerate via frame skipping (reduces rendered frames)
+    # - speed < 1 : slow down via timer/FPS scaling (no frame skipping)
+    frame_step = max(1, int(round(speed))) if speed >= 1.0 else 1
+    effective_interval_ms = (
+        int(interval_ms)
+        if speed >= 1.0
+        else max(1, int(round(float(interval_ms) / speed)))
+    )
+    effective_fps = (
+        int(fps)
+        if speed >= 1.0
+        else max(1, int(round(float(fps) * speed)))
+    )
+
     agents_history = _load_history(results_dir, "agents_history.pkl")
     attachment_history = _load_history(results_dir, "attachment_points.pkl")
     target_history_path = os.path.join(results_dir, "target_history.pkl")
@@ -355,21 +373,25 @@ def animate_run(
         ax.legend(loc="upper right")
         ax.grid(False)
 
+    frame_indices = list(range(0, len(agents_history), frame_step))
+    if frame_indices[-1] != len(agents_history) - 1:
+        frame_indices.append(len(agents_history) - 1)
+
     ani = animation.FuncAnimation(
         fig,
         update,
-        frames=len(agents_history),
-        interval=interval_ms,
+        frames=frame_indices,
+        interval=effective_interval_ms,
         repeat=False,
     )
     if out_path:
         ext = os.path.splitext(out_path)[1].lower()
         try:
             if ext == ".gif":
-                writer = animation.PillowWriter(fps=fps)
+                writer = animation.PillowWriter(fps=effective_fps)
             else:
                 # Default to ffmpeg for mp4/other video extensions.
-                writer = animation.FFMpegWriter(fps=fps)
+                writer = animation.FFMpegWriter(fps=effective_fps)
             ani.save(out_path, writer=writer, dpi=dpi)
             print(f"[animation] saved: {out_path}")
         except Exception as exc:
@@ -409,6 +431,12 @@ def main() -> None:
     )
     parser.add_argument("--fps", type=int, default=20, help="Export frames-per-second when --out is set.")
     parser.add_argument("--dpi", type=int, default=140, help="Export DPI when --out is set.")
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Playback speed multiplier. >1 is faster, <1 is slower (applies to interactive and exported animation).",
+    )
     args = parser.parse_args()
     animate_run(
         args.results,
@@ -419,6 +447,7 @@ def main() -> None:
         out_path=args.out,
         fps=args.fps,
         dpi=args.dpi,
+        speed=args.speed,
     )
 
 
