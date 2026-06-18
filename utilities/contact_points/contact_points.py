@@ -15,17 +15,23 @@ This is still simple:
 
 from dataclasses import dataclass
 import argparse
+import sys
+from pathlib import Path as FilePath
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy.spatial import ConvexHull, QhullError, cKDTree
 
+UTILITIES_DIR = FilePath(__file__).resolve().parents[1]
+if str(UTILITIES_DIR) not in sys.path:
+    sys.path.insert(0, str(UTILITIES_DIR))
 
 try:
-    from .mock_data import generate_mock_satellite_point_cloud
+    from ..data.mock_data import generate_mock_satellite_point_cloud
 except ImportError:
-    from mock_data import generate_mock_satellite_point_cloud
+    from data.mock_data import generate_mock_satellite_point_cloud
 
 
 try:

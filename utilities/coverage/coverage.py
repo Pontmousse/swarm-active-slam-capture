@@ -23,16 +23,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import argparse
+import sys
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy.spatial import cKDTree
 
-from mock_data import EllipsoidModel
-
+UTILITIES_DIR = Path(__file__).resolve().parents[1]
+if str(UTILITIES_DIR) not in sys.path:
+    sys.path.insert(0, str(UTILITIES_DIR))
 
 try:
-    from .mock_data import (
+    from ..data.mock_data import (
+        EllipsoidModel,
         generate_mock_satellite_point_cloud,
         ellipsoid_wireframe,
         set_axes_equal,
@@ -45,7 +50,8 @@ try:
         ellipsoid_to_world_frame,
     )
 except ImportError:
-    from mock_data import (
+    from data.mock_data import (
+        EllipsoidModel,
         generate_mock_satellite_point_cloud,
         ellipsoid_wireframe,
         set_axes_equal,

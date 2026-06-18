@@ -266,6 +266,7 @@ These utilities are not automatically invoked by `run_active_slam.py`.
 
 - The active scientific target is a moving spacecraft-like object, defaulting to `Orion_Capsule`.
 - The 3D simulator's default target motion is effectively static unless target velocity/angular velocity are changed.
+- Attachment-point velocity bidding treats velocity alignment as neutral when either velocity is effectively zero and bounds the inverse relative-velocity term away from division by zero.
 - The online SLAM integration currently produces feedback but does not yet drive simulator decisions or control.
 - The 3D simulator and DDFGO++ depend on path and filename agreement through `shared_config.py`; keep `N`, `D`, `DT`, and `object_name` synchronized when reusing saved data.
 - `DDFGO++/config.py::feature_id_namespace_policy` is currently `"registry"`. The code also supports `"source_feature_idx"` and `"auto"`, but changing this affects graph IDs and decentralized map sharing assumptions.

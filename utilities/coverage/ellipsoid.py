@@ -23,22 +23,29 @@ Or from inside utilities:
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("QtAgg")
 
+UTILITIES_DIR = Path(__file__).resolve().parents[1]
+if str(UTILITIES_DIR) not in sys.path:
+    sys.path.insert(0, str(UTILITIES_DIR))
+
 try:
     # Works if utilities is imported as a package
-    from .mock_data import (
+    from ..data.mock_data import (
         EllipsoidModel,
         generate_mock_satellite_point_cloud,
         ellipsoid_wireframe,
         set_axes_equal,
     )
 except ImportError:
-    # Works when running directly: python utilities/ellipsoid.py
-    from mock_data import (
+    # Works when running directly from utilities/coverage.
+    from data.mock_data import (
         EllipsoidModel,
         generate_mock_satellite_point_cloud,
         ellipsoid_wireframe,

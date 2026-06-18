@@ -1,10 +1,12 @@
+import gtsam
+
 import numpy as np
 import os
 from functools import partial
 import copy
 import time
 from datetime import timedelta
-import gtsam
+
 import open3d as o3d
 from gtsam import symbol_shorthand
 import pickle
@@ -1095,7 +1097,7 @@ def _run_slam_timestep_body(slam_state):
 
             # Add extra noise to observations
             bearing_obs = add_noise_to_Unit3(bearing, bearing_sigma)
-            range_obs = range_ + np.random.uniform(low=-range_sigma, high=range_sigma, size=(1,))
+            range_obs = float(range_ + np.random.uniform(low=-range_sigma, high=range_sigma))
 
             # Convert bearing range observations into feature global position to act as initial estimate
             feature_obs = BearingRange2Cartesian3D(state_obs, bearing_obs, range_obs)
@@ -1193,7 +1195,7 @@ def _run_slam_timestep_body(slam_state):
 
                     # Add extra noise to observations
                     bearing_obs = add_noise_to_Unit3(bearing, bearing_sigma)
-                    range_obs = range_ + np.random.uniform(low=-range_sigma, high=range_sigma, size=(1,))
+                    range_obs = float(range_ + np.random.uniform(low=-range_sigma, high=range_sigma))
 
                     # Convert bearing range observations into feature global position to act as initial estimate
                     feature_obs = BearingRange2Cartesian3D(state_obs, bearing_obs, range_obs)

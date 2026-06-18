@@ -361,8 +361,9 @@ def calculate_bid(Spacecraft, attachment_points, iter, sim_params):
             ap_vel = ap.velocity[iter]
             agent_vel = np.array(Spacecraft['State'][3:6])
             rel_vel = np.linalg.norm(ap_vel - agent_vel)
-            cos_theta = np.dot(ap_vel, agent_vel)/(np.linalg.norm(ap_vel)*np.linalg.norm(agent_vel))
-            vbid = cos_theta + 1/rel_vel
+            velocity_norm_product = np.linalg.norm(ap_vel) * np.linalg.norm(agent_vel)
+            cos_theta = np.dot(ap_vel, agent_vel) / velocity_norm_product if velocity_norm_product > 1e-12 else 0.0
+            vbid = cos_theta + 1 / max(rel_vel, 1e-12)
             
             # Normal  
             ap_normal = ap.normal[iter]

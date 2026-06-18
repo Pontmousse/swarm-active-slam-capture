@@ -18,12 +18,18 @@ Assumption:
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 
+UTILITIES_DIR = Path(__file__).resolve().parents[1]
+if str(UTILITIES_DIR) not in sys.path:
+    sys.path.insert(0, str(UTILITIES_DIR))
 
 try:
-    from .mock_data import (
+    from ..data.mock_data import (
         generate_mock_satellite_point_cloud,
         generate_mock_agent_trajectories,
         generate_mock_partial_observations,
@@ -36,7 +42,7 @@ try:
         make_candidate_messages,
     )
 except ImportError:
-    from mock_data import (
+    from data.mock_data import (
         generate_mock_satellite_point_cloud,
         generate_mock_agent_trajectories,
         generate_mock_partial_observations,
