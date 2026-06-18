@@ -1,0 +1,30 @@
+# Core numerical and plotting stack
+numpy
+scipy
+matplotlib
+pandas
+
+# 3D simulation, geometry, and visualization
+pybullet
+open3d
+pyvista
+trimesh
+
+# SLAM / factor graph optimization
+# gtsam
+
+# Image, video, and screen capture utilities
+Pillow
+opencv-python
+moviepy<2
+pyautogui
+
+# Optimization and symbolic math helpers
+pyswarms
+sympy
+
+# Notifications / HTTP integrations
+requests
+
+# Hardware-facing optional stack used by simplified_2d/simplified_swarm.py
+# robomaster
