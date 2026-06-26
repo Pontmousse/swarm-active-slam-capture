@@ -212,6 +212,26 @@ def plot_ort_rot(position, rot_matrix, a):
 #####################################################################################################################
 
 
+def explore_attraction_force(Spacecraft, gain, coverage_threshold):
+    """Small translational bias toward MapExploreDirection when coverage is below threshold."""
+    if gain <= 0.0 or coverage_threshold <= 0.0:
+        return np.zeros(3)
+
+    ratio = float(Spacecraft.get("MapCoverageRatio", 0.0) or 0.0)
+    if ratio >= coverage_threshold:
+        return np.zeros(3)
+
+    direction = np.asarray(Spacecraft.get("MapExploreDirection", []), dtype=float).reshape(-1)
+    if direction.size != 3:
+        return np.zeros(3)
+    norm = np.linalg.norm(direction)
+    if norm <= 1e-12:
+        return np.zeros(3)
+
+    weight = (coverage_threshold - ratio) / coverage_threshold
+    return gain * weight * (direction / norm)
+
+
 def Encapsulate(Spacecraft, Agents, sim_gains, cond_viz):    
     # Extract controller gains
     nu = sim_gains.Flk_Potential # Flocking Potential Gain
@@ -299,11 +319,18 @@ def Encapsulate(Spacecraft, Agents, sim_gains, cond_viz):
     ##################################################
     ######### Derivative Feedback (Optional) #########
     F_v = -Kd * rdot
+
+    F_explore = explore_attraction_force(
+        Spacecraft,
+        sim_gains.Explore_Attraction_Gain,
+        sim_gains.Explore_Coverage_Threshold,
+    )
     
     ##################################################
     ####################### Total ####################
     
-    Frc = F_flk + F_ant + F_v
+    Frc = F_flk + F_ant + F_v + F_explore
+    Spacecraft["Explore_Force"] = F_explore
     
     # Debug
     # print('\n')

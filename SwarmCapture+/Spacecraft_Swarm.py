@@ -16,6 +16,8 @@ class SimulationParameters:
                  Flk_Potential,
                  AntFlk_Potential,
                  Encapsulate_Derivative_Gain,
+                 Explore_Attraction_Gain,
+                 Explore_Coverage_Threshold,
                  
                  Capture_Proportional_Gain,
                  Capture_Derivative_Gain,
@@ -34,6 +36,8 @@ class SimulationParameters:
         self.Flk_Potential = Flk_Potential
         self.AntFlk_Potential = AntFlk_Potential
         self.Encapsulate_Derivative_Gain = Encapsulate_Derivative_Gain
+        self.Explore_Attraction_Gain = Explore_Attraction_Gain
+        self.Explore_Coverage_Threshold = Explore_Coverage_Threshold
         
         self.Capture_Proportional_Gain = Capture_Proportional_Gain
         self.Capture_Derivative_Gain = Capture_Derivative_Gain

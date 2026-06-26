@@ -49,13 +49,21 @@ The runner:
 
 ### Current Integration Boundary
 
-The active runner already passes `agents_commands` and `slam_feedback` into the simulator API, and DDFGO++ returns feedback containing pose estimates, target estimates, map summaries, and map-quality fields. However, the current 3D simulator does not yet use these values for closed-loop behavior:
+The active runner passes `agents_commands` and `slam_feedback` into the simulator API. DDFGO++ returns feedback containing pose estimates, target estimates, map summaries, dense map point arrays, and map-quality fields.
+
+When `DDFGO++/config.py::oracle_growing_map` is `True`, each SLAM update skips iSAM and voxel-accumulates simulator `LandSet` observations into `MergedMapSet` using truth poses and target kinematics (fast controller prototyping).
+
+`build_slam_feedback()` exposes per-agent `merged_map_sets` and `merged_map_shared_sets` (numpy `N×3`). `run_decision_phase()` copies these into each agent as `MergedMapSet` / `MergedMapSharedSet`, runs ellipsoid coverage (`MapCoverageRatio`, `MapExploreDirection`, …), then control runs.
+
+In encapsulation mode (`Mode == 'e'`), `Controllers.Encapsulate()` adds a gated explore attraction force when `MapCoverageRatio` is below `explore_coverage_threshold` (see `SimulationConfig`): a small push along `MapExploreDirection`, scaled by `(threshold - ratio) / threshold`. Set `explore_attraction_gain = 0` to disable. Flocking/antiflocking and LCD pointing are unchanged.
+
+Remaining gaps:
 
 - `build_agents_commands()` currently returns `None`.
-- `Swarm_Target_Capture+.py::run_decision_phase()` accepts `slam_feedback` but discards it.
-- `Swarm_Target_Capture+.py::run_control_phase()` accepts `agents_commands` but discards it.
+- `run_control_phase()` accepts `agents_commands` but discards it.
+- Attitude still uses `LCD` via `Control_Frame`; explore direction affects translation only.
 
-So the present online workflow is best described as simulation plus online SLAM feedback generation/checkpointing, not a completed SLAM-driven controller.
+So the present online workflow is simulation plus SLAM feedback, oracle map growth, coverage-based explore biasing in encapsulation, and checkpointing.
 
 ## Shared Configuration
 
@@ -126,6 +134,8 @@ Important defaults include:
 - `detection_radius = 100`;
 - `target_velocity = (0.0, 0.0, 0.0)`;
 - `target_angular_velocity = 0*(0.005, -0.01, 0.01)`, which evaluates to an empty tuple in Python and should be treated carefully if target rotation is changed.
+- `explore_attraction_gain = 0.1` — encapsulation-mode force along `MapExploreDirection` when coverage is low;
+- `explore_coverage_threshold = 0.90` — disable explore attraction above this `MapCoverageRatio`.
 
 ### 3D Outputs
 
@@ -171,6 +181,7 @@ From `DDFGO++/config.py`:
 - `sw = 30` sliding window length;
 - `Max_Land = 20`;
 - `map_mode = "hybrid"` with sparse landmarks and dense scans;
+- `oracle_growing_map = False` — when `True`, skip iSAM and accumulate `LandSet` into `MergedMapSet` with truth poses (controller prototyping);
 - `Decentralized = True`;
 - `Qn = 2`, `Ql = 5`;
 - `Kinem = "n_step_Kinem"`;
@@ -261,6 +272,39 @@ The `utilities/` folder contains standalone research helpers:
 - `mock_data.py`: synthetic satellite, agent, ellipsoid, observation, frontier, and contact-point scenes.
 
 These utilities are not automatically invoked by `run_active_slam.py`.
+
+## Visualization
+
+The [`visualization/`](visualization/) folder contains a lightweight matplotlib animator for DDFGO++ dense maps (no Open3D / PyBullet).
+
+Run from the repository root after a SLAM run has written `DDFGO++/Results/Agents_History_<results_tag>.pkl` (online checkpoints or batch SLAM). Expects `MergedMapSet` on each agent (oracle `oracle_growing_map` or hybrid/dense `map_mode`).
+
+```bash
+python visualization/animate_merged_map.py
+python visualization/animate_merged_map.py --highlight-agent 1 --agents-pickle DDFGO++/Results/Agents_History_<tag>.pkl
+python visualization/animate_merged_map.py --no-save
+```
+
+Defaults:
+
+- resolves the agents pickle via `DDFGO++/config.py::get_results_paths()`;
+- highlights agent 1 (1-based), draws all agents as oriented wireframe cubes with pointing arrows and motion trails;
+- animates the highlighted agent's growing `MergedMapSet` (falls back to `MergedMapSharedSet` with a console warning if local map is empty);
+- saves `visualization/output/merged_map_agent<id>.gif` (`--save` on by default; use `--no-save` to preview only).
+
+`animate_coverage.py` reads **SwarmCapture+** sim pickles (`SwarmCapture+/Data/Agents_History*.pkl`) and animates `MapEllipsoid`, patch coverage, `MapExploreDirection` (cyan), and controller pointing via `LCD` (orange) for one highlighted agent.
+
+```bash
+python visualization/animate_coverage.py
+python visualization/animate_coverage.py --highlight-agent 1 --downsample 5
+python visualization/animate_coverage.py --agents-pickle SwarmCapture+/Data/Agents_HistoryN2_D5_dt240_Orion_Capsule.pkl --no-save
+```
+
+Defaults:
+
+- resolves the sim agents pickle from `shared_config.get_sim_data_paths()` (also tries `Agents_History<tag>.pkl` without underscore);
+- reuses `utilities/coverage/coverage.py` (`add_patch_collection`, `compute_coverage_ratio`, `ellipsoid_point_from_angles`, etc.);
+- saves `visualization/output/coverage_agent<id>.gif` (`--save` on by default; use `--no-save` to preview only).
 
 ## Known Assumptions and Limitations
 

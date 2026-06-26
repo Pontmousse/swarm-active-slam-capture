@@ -33,8 +33,8 @@ object_name = shared_config.object_name
 history_downsample_step = 1
 animation_downsample_step = 1
 
-sw = 30
-Max_Land = 20
+sw = 8
+Max_Land = 10
 unc = 0.000001
 
 #############################################################################################
@@ -50,17 +50,20 @@ USE_RANDOM_FEATURE_FILL = True
 feature_id_namespace_policy = "registry"
 
 map_mode = "hybrid"  # sparse, dense, hybrid
-voxel_size = 0.01
+# Fast controller prototyping: voxel-merge LandSet observations into MergedMapSet using
+# simulator truth poses/kinematics; skips iSAM and factor-graph front/back-end.
+oracle_growing_map = True
+voxel_size = 0.5
 icp_threshold = 1.5
-scan_downsample_voxel_size = 0.01
+scan_downsample_voxel_size = 1.0
 feature_noise_std = 0.0  # None => use Feature_Processing default
 dense_map_pose_source = "state_estim"  # default scan placement source: state_estim, state_obs, true_state
 # Near-perfect/no-noise runs can place dense scans with the observed pose so the
 # dense overlay reflects the intended perfect-measurement experiment.
-dense_map_pose_source_unc_tiny = "state_obs"
+dense_map_pose_source_unc_tiny = "true_state"
 
 # Post-optimization outlier rejection (Phase C)
-enable_outlier_rejection = True
+enable_outlier_rejection = False
 outlier_max_distance_from_com = 20.0
 outlier_max_stale_frames = 150000
 
@@ -108,7 +111,7 @@ Update_Sliding_Window = False
 
 Init_Pose_Only = False
 Odom = True
-Kinem = "n_step_Kinem"
+Kinem = "No_Kinem"
 
 Decentralized = True
 Qn = 2
@@ -117,7 +120,7 @@ kappa_seconds = 1.0  # cadence for communication/registration
 
 FGO_Param = False
 calculate_w_method = "w4"  # options: w1, w2, w3, w4
-low_pass_filter_coeff = 0.1
+low_pass_filter_coeff = 1.0
 # When unc is at or below this threshold, pose smoothing is bypassed (effective alpha=1: State_Estim = ISAM Pose3).
 # Near-noise runs otherwise accumulate large artificial drift because low-pass blends toward lagged State_Estim.
 pose_low_pass_disable_unc_threshold = 1e-4

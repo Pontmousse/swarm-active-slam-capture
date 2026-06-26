@@ -244,13 +244,24 @@ def load_pickle_file(path):
         return pickle.load(file)
 
 
+def atomic_pickle_dump(obj, final_path):
+    final_path = os.fspath(final_path)
+    tmp_path = final_path + ".tmp"
+    try:
+        with open(tmp_path, "wb") as file:
+            pickle.dump(obj, file, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp_path, final_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
 def save_pickle_files(agents_history, target_history, config_module=config):
     results_paths = config_module.get_results_paths()
     os.makedirs(os.path.dirname(results_paths["agents"]), exist_ok=True)
-    with open(results_paths["agents"], "wb") as file:
-        pickle.dump(agents_history, file)
-    with open(results_paths["target"], "wb") as file:
-        pickle.dump(target_history, file)
+    atomic_pickle_dump(agents_history, results_paths["agents"])
+    atomic_pickle_dump(target_history, results_paths["target"])
 
 
 def load_simulation_histories(config_module=config):
@@ -502,11 +513,18 @@ def process_slam_update(slam_state, frame_buffer):
 def build_slam_feedback(slam_state):
     agents = slam_state["Agents_History"][-1]
     map_summaries = []
+    merged_map_sets = []
+    merged_map_shared_sets = []
     for agent in agents:
+        merged_pts = _as_points_array(agent.get("MergedMapSet", np.array([]).reshape(0, 3)))
+        shared_pts = _as_points_array(agent.get("MergedMapSharedSet", np.array([]).reshape(0, 3)))
+        merged_map_sets.append(merged_pts.copy())
+        merged_map_shared_sets.append(shared_pts.copy())
         map_summaries.append(
             {
                 "map_size": len(agent.get("MapSet", [])),
-                "merged_map_size": len(agent.get("MergedMapSet", [])),
+                "merged_map_size": len(merged_pts),
+                "merged_map_shared_size": len(shared_pts),
                 "map_growth": agent.get("MapGrowth"),
                 "merged_map_error": agent.get("MergedMap_Error"),
             }
@@ -520,6 +538,8 @@ def build_slam_feedback(slam_state):
         "target_com_estimate": first_agent.get("Target_COM"),
         "target_velocity_estimate": first_agent.get("Target_V"),
         "target_angular_velocity_estimate": first_agent.get("Target_W"),
+        "merged_map_sets": merged_map_sets,
+        "merged_map_shared_sets": merged_map_shared_sets,
         "map_summaries": map_summaries,
         "map_quality": {
             "total_fgo_error": [agent.get("Total_FGO_Error") for agent in agents],
@@ -529,6 +549,9 @@ def build_slam_feedback(slam_state):
             "last_slam_elapsed": slam_state.get("last_slam_elapsed", 0.0),
             "num_slam_steps": len(slam_state["Agents_History"]),
             "mode": slam_state.get("mode"),
+            "oracle_growing_map": bool(
+                getattr(slam_state.get("config_module", config), "oracle_growing_map", False)
+            ),
         },
     }
     slam_state["latest_slam_feedback"] = feedback
@@ -547,6 +570,69 @@ def _as_points_array(points):
     if points.size == 0:
         return np.array([]).reshape(0, 3)
     return points.reshape(-1, 3)
+
+
+def accumulate_oracle_growing_map(prev_merged, land_set, voxel_size):
+    """Voxel-merge prior map with current LandSet observations (world frame)."""
+    obs = _as_points_array(land_set)
+    prev = _as_points_array(prev_merged)
+    if len(obs) == 0 and len(prev) == 0:
+        return np.array([]).reshape(0, 3)
+    if len(obs) == 0:
+        return prev.copy()
+    if len(prev) == 0:
+        combined = obs
+    else:
+        combined = np.vstack([prev, obs])
+    if voxel_size is not None and float(voxel_size) > 0.0:
+        return merge_voxel(combined, float(voxel_size))
+    return combined
+
+
+def _delete_ephemeral_agent_history_keys(i):
+    for agent_idx in range(N):
+        agent = Agents_History[i][agent_idx]
+        for key in (
+            "CommSet",
+            "LandSet",
+            "DockSet",
+            "CollSet",
+            "AntFlkSet",
+            "LC",
+            "LCD",
+            "LCD_Frame",
+            "Odometry",
+            "Target",
+        ):
+            agent.pop(key, None)
+
+
+def _maybe_checkpoint_slam_pickle(slam_state, i):
+    mode_run = slam_state.get("mode", "batch")
+    slam_n = slam_state.get("slam_update_counter")
+    save_every_online = max(1, getattr(config, "save_every_slam_updates", 10))
+    if mode_run == "online":
+        save_every_batch = save_every_online
+        do_save_chk = slam_n is not None and slam_n >= 1 and (slam_n % save_every_batch == 0)
+    else:
+        save_every_batch = max(1, int((num_iter - 1) / max(1, config.save_num_chunks)))
+        do_save_chk = i % save_every_batch == 0
+    if not do_save_chk:
+        return
+    if mode_run == "online":
+        print(f"\n[SLAM-SAVE] Saving checkpoint pickles (every {save_every_batch} SLAM updates)\n")
+    else:
+        print(f"\n[SLAM-SAVE] Saving checkpoint pickles (batch save every={save_every_batch} timestep indices)\n")
+    save_pickle_files(Agents_History, Target_History, config)
+    print("[SLAM-SAVE] Two pickle files saved")
+    print(f"[SLAM-SAVE] Check files with name tag: {tag} \n")
+    if config.enable_notify:
+        notify(
+            f"DDFGO++ progress: Iteration {i}/{num_iter-1} saved.",
+            title="DDFGO++ Progress",
+            topic=config.notify_topic,
+            verbose=True,
+        )
 
 
 def _build_shared_dense_map(agents_history, agent_idx, frame_idx, voxel_size):
@@ -1736,56 +1822,12 @@ def _run_slam_timestep_body(slam_state):
     ########################################################################################################################
     # Delete unused keys for memory saving
     ########################################################################################################################
-    for a in range(N):
-        del Agents_History[i][a]['CommSet']
-        del Agents_History[i][a]['LandSet']
-        del Agents_History[i][a]['DockSet']
-        del Agents_History[i][a]['CollSet']
-        del Agents_History[i][a]['AntFlkSet']
-        del Agents_History[i][a]['LC']
-        del Agents_History[i][a]['LCD']
-        del Agents_History[i][a]['LCD_Frame']
-        del Agents_History[i][a]['Odometry']
-        del Agents_History[i][a]['Target']
-
-        # delete all vizualization data to make the pickle saving lightweight INSHALLAH
-        # del Agents_History[i-1][a]['FeatureSet']
-        # del Agents_History[i-1][a]['FeatureIdxSet']
-        # del Agents_History[i-1][a]['MapSet']
-        # del Agents_History[i-1][a]['MapIdxSet']
-        # del Agents_History[i-1][a]['MapNghSet']
-
-
-
-
+    _delete_ephemeral_agent_history_keys(i)
 
     ########################################################################################################################
     # Save using Pickle module for Plotting and Printing in a separate code
     ########################################################################################################################
-
-    # Save periodically based on config
-    save_every_online = max(1, getattr(config, "save_every_slam_updates", 10))
-    if mode_run == "online":
-        save_every_batch = save_every_online
-        do_save_chk = slam_n >= 1 and (slam_n % save_every_batch == 0)
-    else:
-        save_every_batch = max(1, int((num_iter - 1) / max(1, config.save_num_chunks)))
-        do_save_chk = i % save_every_batch == 0
-    if do_save_chk:
-        if mode_run == "online":
-            print(f"\n[SLAM-SAVE] Saving checkpoint pickles (every {save_every_batch} SLAM updates)\n")
-        else:
-            print(f"\n[SLAM-SAVE] Saving checkpoint pickles (batch save every={save_every_batch} timestep indices)\n")
-        save_pickle_files(Agents_History, Target_History, config)
-        print('[SLAM-SAVE] Two pickle files saved')
-        print(f'[SLAM-SAVE] Check files with name tag: {tag} \n')
-        if config.enable_notify:
-            notify(
-                f"DDFGO++ progress: Iteration {i}/{num_iter-1} saved.",
-                title="DDFGO++ Progress",
-                topic=config.notify_topic,
-                verbose=True,
-            )
+    _maybe_checkpoint_slam_pickle(slam_state, i)
 
     _capture_slam_globals(slam_state)
 
@@ -1812,11 +1854,105 @@ def initialize_slam_batch(prepared_histories, cfg: DdfgoConfig, runtime: Runtime
         )
 
     _initialize_slam_batch_body(slam_state)
+    if getattr(cfg.config_module, "oracle_growing_map", False):
+        print("[SLAM-INIT] oracle_growing_map=True — accumulating LandSet into MergedMapSet; iSAM skipped per step")
     return slam_state
+
+def _run_oracle_growing_map_timestep(slam_state):
+    global Agents_History, N, Target_History, elapsed_time, avg_time_per_iteration
+    global estimated_time_left, estimated_time_left_str, iterations_left, start_time, i, num_iter
+    global tag, voxel_size, target_noise_std, target_noise_bias
+    _restore_slam_globals(slam_state)
+
+    zero_std = 0 * target_noise_std
+    zero_bias = 0 * target_noise_bias
+
+    for a in range(N):
+        start_time_iteration_agent = time.time()
+        agent = Agents_History[i][a]
+        prev_merged = Agents_History[i - 1][a].get("MergedMapSet", np.array([]).reshape(0, 3))
+        merged = accumulate_oracle_growing_map(
+            prev_merged,
+            agent.get("LandSet", []),
+            voxel_size,
+        )
+        pose_truth = true_pose(Agents_History, a, i)
+        target_true = measure_target_params(Target_History[i], zero_std, zero_bias)
+
+        agent["State_Estim"] = pose_truth
+        agent["State_Obs"] = pose_truth
+        agent["Target_True"] = target_true
+        agent["Target_COM"] = np.array(target_true[:3], dtype=np.float64)
+        agent["Target_V"] = np.array(target_true[3:6], dtype=np.float64)
+        agent["Target_W"] = np.array(target_true[6:9], dtype=np.float64)
+        agent["Target_Estim"] = np.concatenate((
+            agent["Target_COM"],
+            agent["Target_V"],
+            agent["Target_W"],
+        ))
+        agent["MergedMapSet"] = merged
+        agent["MapSet"] = []
+        agent["MapIdxSet"] = []
+        agent["MapNghSet"] = []
+        agent["MapGrowth"] = len(merged)
+        agent["KinLoopClosuresAdded"] = 0
+        agent["KinLoopClosuresUnique"] = 0
+        agent["ReobsCount"] = 0
+        agent["Total_FGO_Error"] = 0.0
+        agent["Visible_FGO_Error"] = 0.0
+        agent["MergedMap_Error"] = {
+            "chamfer_distance": 0.0,
+            "rmse_est_to_gt": 0.0,
+            "inlier_ratio": 1.0,
+        }
+        agent["CPU_time"] = time.time() - start_time_iteration_agent
+
+    for a_shared in range(N):
+        Agents_History[i][a_shared].update(
+            _build_shared_dense_map(Agents_History, a_shared, i, voxel_size)
+        )
+
+    _delete_ephemeral_agent_history_keys(i)
+
+    elapsed_time = time.time() - start_time
+    avg_time_per_iteration = elapsed_time / (i + 1)
+    iterations_left = num_iter - i - 1
+    estimated_time_left = avg_time_per_iteration * iterations_left
+    estimated_time_left_str = str(timedelta(seconds=estimated_time_left))
+
+    mode_run = slam_state.get("mode", "batch")
+    slam_n = slam_state.get("slam_update_counter")
+    global_iter = slam_state.get("current_global_iteration")
+    global_time = slam_state.get("current_global_sim_time")
+    expected_steps = slam_state.get("expected_sim_iterations")
+    map_counts = [len(Agents_History[i][ai].get("MergedMapSet", [])) for ai in range(N)]
+    if mode_run == "online" and slam_n is not None and slam_n >= 1:
+        g_part = ""
+        if global_iter is not None:
+            denom = f" / {expected_steps} sim steps total" if expected_steps is not None else ""
+            g_part = f"Global sim step index {global_iter}{denom} @ t={global_time:.5f}s | "
+        print(
+            f"[SLAM-ORACLE] growing map — agents={N} | "
+            f"SLAM update #{slam_n} | {g_part}"
+            f"MergedMapSet points per agent: {map_counts}"
+        )
+    else:
+        print(
+            f"[SLAM-ORACLE] growing map — agents={N} | "
+            f"timestep index {i} / {max(num_iter - 1, 1)} | "
+            f"MergedMapSet points per agent: {map_counts}"
+        )
+
+    _maybe_checkpoint_slam_pickle(slam_state, i)
+    _capture_slam_globals(slam_state)
+
 
 def run_slam_timestep(slam_state, i):
     slam_state["i"] = i
-    _run_slam_timestep_body(slam_state)
+    if getattr(config, "oracle_growing_map", False):
+        _run_oracle_growing_map_timestep(slam_state)
+    else:
+        _run_slam_timestep_body(slam_state)
 
 def run_slam_batch(slam_state):
     for i in range(1, slam_state["num_iter"]):

@@ -28,8 +28,6 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use("QtAgg")
 
 UTILITIES_DIR = Path(__file__).resolve().parents[1]
 if str(UTILITIES_DIR) not in sys.path:
@@ -127,6 +125,46 @@ def fit_viewpoint_ellipsoid_pca(
         axes=axes,
         rotation=rotation,
     )
+
+
+
+def estimate_point_normals(
+    points: np.ndarray,
+    camera_location: np.ndarray | None = None,
+    radius: float | None = None,
+    max_nn: int = 30,
+) -> np.ndarray:
+    """
+    Estimate normals for a partial map point cloud (Open3D).
+
+    camera_location: e.g. agent position — orients normals toward the viewer.
+    Returns (N, 3); empty input -> (0, 3).
+    """
+    import open3d as o3d
+
+    points = np.asarray(points, dtype=float).reshape(-1, 3)
+    if len(points) == 0:
+        return np.empty((0, 3), dtype=float)
+
+    if radius is None:
+        sample = points[: min(len(points), 200)]
+        if len(sample) >= 2:
+            dists = np.linalg.norm(sample[1:] - sample[:-1], axis=1)
+            radius = float(max(np.median(dists) * 4.0, 0.01))
+        else:
+            radius = 0.05
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=max_nn)
+    )
+    if camera_location is not None:
+        pcd.orient_normals_towards_camera_location(
+            camera_location=np.asarray(camera_location, dtype=float).reshape(3)
+        )
+    return np.asarray(pcd.normals, dtype=float)
+
 
 
 def project_points_radially_to_ellipsoid(
@@ -483,10 +521,10 @@ def plot_ellipsoid_fit(
             projected_points[:, 2],
             s=5,
             alpha=0.35,
-            label="radial projections",
+            label="projected points",
         )
 
-    ax.set_title("PCA Viewpoint Ellipsoid from mock_data.py")
+    ax.set_title("PCA Viewpoint Ellipsoid (Open3D estimated normals)")
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
     ax.set_zlabel("z [m]")
@@ -509,8 +547,15 @@ def plot_ellipsoid_fit(
 
 
 def main() -> None:
+    import matplotlib
+
+    try:
+        matplotlib.use("QtAgg")
+    except ImportError:
+        pass
+
     parser = argparse.ArgumentParser(
-        description="Fit a simple PCA viewpoint ellipsoid using mock_data.py."
+        description="Fit a PCA viewpoint ellipsoid; normals from Open3D on mock points."
     )
 
     parser.add_argument("--seed", type=int, default=7)
@@ -520,23 +565,37 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    points, normals, labels = generate_mock_satellite_point_cloud(seed=args.seed)
+    points, _, labels = generate_mock_satellite_point_cloud(seed=args.seed)
 
     ellipsoid = fit_viewpoint_ellipsoid_pca(
         points=points,
         margin=args.margin,
     )
 
-    # Only project a subset to keep the plot readable
-    projected_points = project_points_radially_to_ellipsoid(
-        points=points[::12],
+    # Mock agent on +x side of cloud (for normal orientation only).
+    cloud_center = points.mean(axis=0)
+    agent_position = cloud_center + np.array(
+        [2.5 * float(np.max(np.ptp(points, axis=0))), 0.0, 0.0]
+    )
+
+    observed_points = points[::12]
+    observed_normals = estimate_point_normals(
+        observed_points,
+        camera_location=agent_position,
+    )
+
+    projected_points = project_points_from_normals_to_ellipsoid(
+        points=observed_points,
+        normals=observed_normals,
         ellipsoid=ellipsoid,
     )
 
     print("Input point cloud from mock_data.py")
-    print(f"  points shape:  {points.shape}")
-    print(f"  normals shape: {normals.shape}")
-    print(f"  labels shape:  {labels.shape}")
+    print(f"  points shape:           {points.shape}")
+    print(f"  labels shape:           {labels.shape}")
+    print(f"  observed subset:        {observed_points.shape[0]} points")
+    print(f"  estimated normals:      {observed_normals.shape}")
+    print(f"  mock agent position:    {np.round(agent_position, 3)}")
     print()
 
     print("Fitted ellipsoid")
@@ -544,6 +603,7 @@ def main() -> None:
     print(f"  axes:   {np.round(ellipsoid.axes, 3)}")
     print("  rotation:")
     print(np.round(ellipsoid.rotation, 3))
+    print(f"  projected points:       {projected_points.shape[0]}")
 
     plot_ellipsoid_fit(
         points=points,

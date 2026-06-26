@@ -21,6 +21,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
 import sys
+import Utilities as utl
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -28,29 +29,46 @@ if str(PROJECT_ROOT) not in sys.path:
 import shared_config
 
 
+def atomic_pickle_dump(obj, final_path):
+    final_path = os.fspath(final_path)
+    tmp_path = final_path + ".tmp"
+    try:
+        with open(tmp_path, "wb") as file:
+            pickle.dump(obj, file, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp_path, final_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+S = shared_config.sim_scale
+
 @dataclass
 class SimulationConfig:
     antflk_radius: float = 100
     flk_radius: float = 4
-    pointing_proportional_gain: float = 3
-    pointing_derivative_gain: float = 0.5
-    flk_potential: float = 1
-    antflk_potential: float = 7000
-    encapsulate_derivative_gain: float = 200
-    capture_proportional_gain: float = 5
-    capture_derivative_gain: float = 100
-    capture_alignment_gain: float = 5
+    pointing_proportional_gain: float = 3 * S
+    pointing_derivative_gain: float = 0.5 * S
+    flk_potential: float = 1 * S
+    antflk_potential: float = 7000 * S
+    encapsulate_derivative_gain: float = 200 * S
+    explore_attraction_gain: float = 500 * S
+    explore_coverage_threshold: float = 0.90
+    capture_proportional_gain: float = 5 * S
+    capture_derivative_gain: float = 100 * S
+    capture_alignment_gain: float = 5 * S
     distance_bid_weight: float = 20
     velocity_bid_weight: float = 1
     normal_bid_weight: float = 1
-    max_force: float = 2
-    max_torque: float = 0.5
+    max_force: float = 2 * S
+    max_torque: float = 0.5 * S
     num_agents: int = shared_config.N
     duration_seconds: float = shared_config.D
     cancel_chw: bool = False
     altitude_km: float = 500
-    low_pass_filter_coeff_state: float = 0.1
-    low_pass_filter_coeff_control: float = 0.4
+    low_pass_filter_coeff_state: float = 1.0 if S > 1 else 0.1
+    low_pass_filter_coeff_control: float = 1.0 if S > 1 else 0.4
     collision_radius: float = 5
     detection_radius: float = 100
     attachment_detection_radius_scale: float = 2
@@ -65,8 +83,8 @@ class SimulationConfig:
     camera_yaw: float = -50.0
     camera_pitch: float = -25.0
     camera_target_position: tuple = (-6.02, -3.66, 0.60)
-    num_rays_theta: int = 50
-    num_rays_phi: int = 50
+    num_rays_theta: int = 20
+    num_rays_phi: int = 20
     visualize_rays: bool = False
     visualize_hits: bool = False
     visualize_fraction: float = 0.3
@@ -157,6 +175,8 @@ def _initialize_simulation_body(sim_state):
         Flk_Potential = cfg["flk_potential"],
         AntFlk_Potential = cfg["antflk_potential"],
         Encapsulate_Derivative_Gain = cfg["encapsulate_derivative_gain"],
+        Explore_Attraction_Gain = cfg["explore_attraction_gain"],
+        Explore_Coverage_Threshold = cfg["explore_coverage_threshold"],
     
         Capture_Proportional_Gain = cfg["capture_proportional_gain"],
         Capture_Derivative_Gain = cfg["capture_derivative_gain"],
@@ -323,6 +343,8 @@ def _initialize_simulation_body(sim_state):
                 "FeatureIdxSet": [],
                 "MapSet": [],
                 "MapIdxSet": [],
+                "MergedMapSet": np.array([]).reshape(0, 3),
+                "MergedMapSharedSet": np.array([]).reshape(0, 3),
 
                 "LC": [],
                 "LCD": [], # Unit vector showing the direction of Landmark Centroid in local frame
@@ -348,13 +370,21 @@ def _initialize_simulation_body(sim_state):
                 "Target": [],
 
                 # Consensus time
-                "ActionTime": random.sample(range(int(100*3*duration/10), int(100*4*duration/10)), 1)[0]/100,
+                # "ActionTime": random.sample(range(int(100*3*duration/10), int(100*4*duration/10)), 1)[0]/100,
+                "ActionTime": 1e12, # For testing, set to a very large number so that consensus is never reached
             
                 # For docking
                 "DockConstraint": None, # Initially no constraint id is created for this specific body with the target
                 "DockContactPoint": None, # Contact point at contact time in agent's world reference frame
                 "DockPose": [], # stored dock agent pose relative to target at docking instant.
-                "DockTime": None
+                "DockTime": None,
+
+                # Coverage
+                "MapCoverageRatio": 0.0,
+                "MapEllipsoid": None,              # EllipsoidModel (center, axes, rotation)
+                "MapCoveragePatches": [],        # list[EllipsoidPatch]
+                "MapExploreTarget": None,        # optional: (3,) world point to look at next
+                "MapExploreDirection": np.array([]),  # optional: unit vector for pointing
             
             }
         Agents.append(agent_state)
@@ -529,10 +559,39 @@ def run_communication_phase(sim_state):
     _capture_sim_globals(sim_state)
 
 
+def _apply_slam_feedback_to_spacecraft(Spacecraft, slam_feedback):
+    if not slam_feedback:
+        return
+    agent_id = int(Spacecraft.get("ID", 0))
+    merged_sets = slam_feedback.get("merged_map_sets")
+    if merged_sets is not None and 0 <= agent_id < len(merged_sets):
+        pts = _as_points_array(merged_sets[agent_id])
+        Spacecraft["MergedMapSet"] = pts.copy()
+    shared_sets = slam_feedback.get("merged_map_shared_sets")
+    if shared_sets is not None and 0 <= agent_id < len(shared_sets):
+        Spacecraft["MergedMapSharedSet"] = _as_points_array(shared_sets[agent_id]).copy()
+
+
+def _as_points_array(points):
+    if points is None:
+        return np.array([]).reshape(0, 3)
+    points = np.asarray(points)
+    if points.size == 0:
+        return np.array([]).reshape(0, 3)
+    return points.reshape(-1, 3)
+
+
 def run_decision_phase(sim_state, slam_feedback=None):
     global DockPose, Spacecraft, contact_point, constraint, mode, mode_prev
-    _ = slam_feedback
     _restore_sim_globals(sim_state)
+
+    _apply_slam_feedback_to_spacecraft(Spacecraft, slam_feedback)
+
+    utl._update_map_coverage_and_explore(
+        Spacecraft,
+        target_com=(slam_feedback or {}).get("target_com_estimate"),
+        explore_offset_distance=Rflk,
+    )
 
     mode_prev = Spacecraft["Mode"]
     if i > 1:
@@ -775,23 +834,19 @@ def record_simulation_frame(sim_state):
         ########################################################################################################################
 
         print('\n[SIM-SAVE] Saving agents history pickle file...')
-        with open(os.path.join(paths["data_dir"], 'Agents_History'+tag+'.pkl'), 'wb') as file:
-            pickle.dump(Agents_History, file)
+        atomic_pickle_dump(Agents_History, os.path.join(paths["data_dir"], 'Agents_History'+tag+'.pkl'))
         print('[SIM-SAVE] Saved successfully')
 
         print('\n[SIM-SAVE] Saving target history pickle file...')
-        with open(os.path.join(paths["data_dir"], 'Target_History'+tag+'.pkl'), 'wb') as file:
-            pickle.dump(Target_History, file)
+        atomic_pickle_dump(Target_History, os.path.join(paths["data_dir"], 'Target_History'+tag+'.pkl'))
         print('[SIM-SAVE] Saved successfully')
 
         print('\n[SIM-SAVE] Saving target PCD history pickle file...')
-        with open(os.path.join(paths["data_dir"], 'Target_PointCloud'+tag+'.pkl'), 'wb') as file:
-            pickle.dump(Target_Point_Cloud_History, file)
+        atomic_pickle_dump(Target_Point_Cloud_History, os.path.join(paths["data_dir"], 'Target_PointCloud'+tag+'.pkl'))
         print('[SIM-SAVE] Saved successfully')
 
         print('\n[SIM-SAVE] Saving attachment points history pickle file...')
-        with open(os.path.join(paths["data_dir"], 'Attachment_Points'+tag+'.pkl'), 'wb') as file:
-            pickle.dump(attachment_points, file)
+        atomic_pickle_dump(attachment_points, os.path.join(paths["data_dir"], 'Attachment_Points'+tag+'.pkl'))
         print('[SIM-SAVE] Saved successfully')
 
     ########################################################################################################################
@@ -893,14 +948,10 @@ def save_simulation_outputs(sim_state):
     with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
         df.to_excel(writer, sheet_name="Sheet1", index=False)
 
-    with open(os.path.join(paths["data_dir"], "Agents_History" + tag + ".pkl"), "wb") as file:
-        pickle.dump(sim_state["Agents_History"], file)
-    with open(os.path.join(paths["data_dir"], "Target_History" + tag + ".pkl"), "wb") as file:
-        pickle.dump(sim_state["Target_History"], file)
-    with open(os.path.join(paths["data_dir"], "Target_PointCloud" + tag + ".pkl"), "wb") as file:
-        pickle.dump(sim_state["Target_Point_Cloud_History"], file)
-    with open(os.path.join(paths["data_dir"], "Attachment_Points" + tag + ".pkl"), "wb") as file:
-        pickle.dump(sim_state["attachment_points"], file)
+    atomic_pickle_dump(sim_state["Agents_History"], os.path.join(paths["data_dir"], "Agents_History" + tag + ".pkl"))
+    atomic_pickle_dump(sim_state["Target_History"], os.path.join(paths["data_dir"], "Target_History" + tag + ".pkl"))
+    atomic_pickle_dump(sim_state["Target_Point_Cloud_History"], os.path.join(paths["data_dir"], "Target_PointCloud" + tag + ".pkl"))
+    atomic_pickle_dump(sim_state["attachment_points"], os.path.join(paths["data_dir"], "Attachment_Points" + tag + ".pkl"))
 
 
 def compute_performance_metrics(sim_state):
