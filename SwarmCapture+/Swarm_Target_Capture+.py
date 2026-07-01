@@ -53,7 +53,7 @@ class SimulationConfig:
     flk_potential: float = 1 * S
     antflk_potential: float = 7000 * S
     encapsulate_derivative_gain: float = 200 * S
-    explore_attraction_gain: float = 500 * S
+    explore_attraction_gain: float = 500 * S * 0
     explore_coverage_threshold: float = 0.90
     capture_proportional_gain: float = 5 * S
     capture_derivative_gain: float = 100 * S

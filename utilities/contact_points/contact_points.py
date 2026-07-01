@@ -417,6 +417,15 @@ def style_clean_3d_axes(ax):
         axis.pane.set_edgecolor("white")
 
 
+def get_discrete_cmap(name, count):
+    count = max(int(count), 1)
+
+    if hasattr(plt, "colormaps"):
+        return plt.colormaps[name].resampled(count)
+
+    return plt.get_cmap(name, count)
+
+
 def plot_segments_and_contact_points(
     points,
     plane_segments,
@@ -441,7 +450,7 @@ def plot_segments_and_contact_points(
             label="unsegmented partial-map points",
         )
 
-    cmap = plt.cm.get_cmap("tab20", max(len(plane_segments), 1))
+    cmap = get_discrete_cmap("tab20", len(plane_segments))
 
     # Plane segments
     for segment in plane_segments:
@@ -596,16 +605,16 @@ def main():
 
     parser.add_argument("--seed", type=int, default=6)
     parser.add_argument("--side", type=str, default="x_pos")
-    parser.add_argument("--contact-spacing", "--grid-size", dest="contact_spacing", type=float, default=1.0)
+    parser.add_argument("--contact-spacing", "--grid-size", dest="contact_spacing", type=float, default=0.65)
     parser.add_argument(
         "--min-points-per-candidate",
         "--min-points-per-cell",
         dest="min_points_per_candidate",
         type=int,
-        default=8,
+        default=16,
     )
     parser.add_argument("--support-radius", type=float, default=None)
-    parser.add_argument("--boundary-margin", type=float, default=0.15)
+    parser.add_argument("--boundary-margin", type=float, default=0.20)
     parser.add_argument("--show-remaining", action="store_true")
     parser.add_argument("--save", type=str, default=None)
     parser.add_argument("--no-show", action="store_true")
@@ -621,12 +630,12 @@ def main():
 
     plane_segments, remaining = segment_planes_ransac(
         points,
-        max_planes=20,
-        distance_threshold=0.035,
+        max_planes=10,
+        distance_threshold=0.02,
         ransac_n=3,
-        num_iterations=1200,
-        min_inliers=50,
-        min_remaining_points=50,
+        num_iterations=2500,
+        min_inliers=80,
+        min_remaining_points=80,
     )
 
     contact_points = generate_contact_points_from_segments(

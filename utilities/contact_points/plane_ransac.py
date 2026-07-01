@@ -165,11 +165,11 @@ def orient_plane_normal_outward(normal, d, segment_center, global_center):
 def segment_planes_ransac(
     points,
     max_planes=10,
-    distance_threshold=0.03,
+    distance_threshold=0.02,
     ransac_n=3,
-    num_iterations=1000,
-    min_inliers=25,
-    min_remaining_points=25,
+    num_iterations=2500,
+    min_inliers=80,
+    min_remaining_points=80,
 ):
     """
     Repeated RANSAC plane extraction.
@@ -262,7 +262,20 @@ def set_axes_equal(ax, points):
     ax.set_zlim(center[2] - radius, center[2] + radius)
 
 
-def plot_plane_segments(points, segments, remaining_points):
+def get_discrete_cmap(name, count):
+    count = max(int(count), 1)
+
+    if hasattr(plt, "colormaps"):
+        return plt.colormaps[name].resampled(count)
+
+    return plt.get_cmap(name, count)
+
+
+def plot_plane_segments(
+    points,
+    segments,
+    remaining_points,
+):
     fig = plt.figure(figsize=(11, 9))
     ax = fig.add_subplot(111, projection="3d")
 
@@ -278,7 +291,7 @@ def plot_plane_segments(points, segments, remaining_points):
             label="remaining",
         )
 
-    cmap = plt.cm.get_cmap("tab20", max(len(segments), 1))
+    cmap = get_discrete_cmap("tab20", len(segments))
 
     for segment in segments:
         pts = segment.points
@@ -353,12 +366,12 @@ def main():
 
     segments, remaining = segment_planes_ransac(
         points,
-        max_planes=20,
-        distance_threshold=0.035,
+        max_planes=10,
+        distance_threshold=0.02,
         ransac_n=3,
-        num_iterations=1200,
-        min_inliers=50,
-        min_remaining_points=50,
+        num_iterations=2500,
+        min_inliers=80,
+        min_remaining_points=80,
     )
 
     print("\nDetected plane segments:")

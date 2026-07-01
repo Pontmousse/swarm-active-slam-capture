@@ -267,9 +267,11 @@ The `utilities/` folder contains standalone research helpers:
 - `plane_ransac.py`: RANSAC plane segmentation and plotting.
 - `contact_points.py`: support polygon extraction and contact-point sampling on plane segments.
 - `candidate_gossip.py` and `demo_candidate_gossip.py`: decentralized sharing and merging of contact candidates.
+  Gossip rebroadcasts preserve each original observation key `(agent, local_candidate, step)`, and receivers ignore observation keys already present in their local shared map. This prevents repeated gossip rounds from cloning the same candidate evidence under new sender-local IDs.
+  Plane/contact utility defaults are tuned conservatively for cleaner debug outputs: stricter RANSAC distance threshold, fewer accepted planes, higher inlier/support requirements, larger contact spacing, and larger boundary margin.
 - `coverage.py`: ellipsoid patch coverage modeling and visualization.
 - `ellipsoid.py`: PCA ellipsoid fitting and projection helpers.
-- `mock_data.py`: synthetic satellite, agent, ellipsoid, observation, frontier, and contact-point scenes.
+- `mock_data.py`: synthetic satellite, agent, ellipsoid, observation, frontier, and contact-point scenes. `utilities/data/mock_data.py::MOCK_TARGET_SHAPE_CASE` selects the default mock target: `"box_panels"` keeps the original cuboid/panel spacecraft, while `"cylinder_cone"` uses a curved cylinder/cone body with panels for testing coverage, ellipsoid fitting, RANSAC limitations, and contact candidate behavior.
 
 These utilities are not automatically invoked by `run_active_slam.py`.
 

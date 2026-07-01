@@ -38,6 +38,7 @@ class SharedContactCandidate:
     parent_plane_equation: np.ndarray
     supporting_agents: set[int] = field(default_factory=set)
     source_ids: list[tuple[int, int]] = field(default_factory=list)
+    observation_keys: set[tuple[int, int, int]] = field(default_factory=set)
     first_seen_step: int = 0
     last_seen_step: int = 0
     observation_count: int = 0
@@ -49,6 +50,14 @@ class CandidateMatchThresholds:
     normal_angle_threshold_deg: float = 20.0
     parent_plane_angle_threshold_deg: float = 20.0
     parent_plane_distance_threshold: float = 0.08
+
+
+def message_observation_key(message: CandidateMessage) -> tuple[int, int, int]:
+    return (
+        int(message.agent_id),
+        int(message.local_cp_id),
+        int(message.step),
+    )
 
 
 def normalize(v: np.ndarray) -> np.ndarray:
@@ -185,13 +194,14 @@ def merge_message_into_shared(
         0.5 * shared.confidence + 0.5 * message_confidence + 0.03,
     )
     shared.area_support = max(shared.area_support, float(message.area_support))
-    shared.supporting_agents.add(message.agent_id)
+    shared.supporting_agents.add(int(message.agent_id))
 
-    source_id = (message.agent_id, message.local_cp_id)
+    source_id = (int(message.agent_id), int(message.local_cp_id))
 
     if source_id not in shared.source_ids:
         shared.source_ids.append(source_id)
 
+    shared.observation_keys.add(message_observation_key(message))
     shared.last_seen_step = max(shared.last_seen_step, int(message.step))
     shared.observation_count += 1
 
@@ -208,9 +218,20 @@ class CandidateGossipMap:
         messages: list[CandidateMessage],
         thresholds: CandidateMatchThresholds,
         current_step: int,
+        trace_events: list[dict] | None = None,
+        receiver_id: int | None = None,
+        gossip_round: int | None = None,
+        phase: str = "gossip",
     ) -> None:
         for message in messages:
-            self.add_or_merge_message(message, thresholds)
+            self.add_or_merge_message(
+                message,
+                thresholds,
+                trace_events=trace_events,
+                receiver_id=receiver_id,
+                gossip_round=gossip_round,
+                phase=phase,
+            )
 
         for candidate in self.candidates:
             candidate.last_seen_step = max(
@@ -222,7 +243,17 @@ class CandidateGossipMap:
         self,
         message: CandidateMessage,
         thresholds: CandidateMatchThresholds,
+        trace_events: list[dict] | None = None,
+        receiver_id: int | None = None,
+        gossip_round: int | None = None,
+        phase: str = "gossip",
     ) -> SharedContactCandidate:
+        message_key = message_observation_key(message)
+
+        for candidate in self.candidates:
+            if message_key in candidate.observation_keys:
+                return candidate
+
         best_candidate = None
         best_score = float("inf")
 
@@ -248,7 +279,25 @@ class CandidateGossipMap:
                 best_score = score
 
         if best_candidate is not None:
-            return merge_message_into_shared(best_candidate, message)
+            pre_merge_position = best_candidate.position.copy()
+            shared = merge_message_into_shared(best_candidate, message)
+            if trace_events is not None:
+                trace_events.append(
+                    {
+                        "phase": phase,
+                        "matched": True,
+                        "receiver_id": receiver_id,
+                        "sender_id": int(message.agent_id),
+                        "local_cp_id": int(message.local_cp_id),
+                        "shared_cp_id": int(shared.shared_cp_id),
+                        "step": int(message.step),
+                        "gossip_round": gossip_round,
+                        "message_position": np.asarray(message.position, dtype=float).copy(),
+                        "pre_merge_position": pre_merge_position,
+                        "post_merge_position": shared.position.copy(),
+                    }
+                )
+            return shared
 
         new_candidate = SharedContactCandidate(
             shared_cp_id=self.next_shared_cp_id,
@@ -259,8 +308,9 @@ class CandidateGossipMap:
             parent_plane_equation=normalize_plane_equation(
                 message.parent_plane_equation,
             ),
-            supporting_agents={message.agent_id},
-            source_ids=[(message.agent_id, message.local_cp_id)],
+            supporting_agents={int(message.agent_id)},
+            source_ids=[(int(message.agent_id), int(message.local_cp_id))],
+            observation_keys={message_key},
             first_seen_step=int(message.step),
             last_seen_step=int(message.step),
             observation_count=1,
@@ -268,6 +318,22 @@ class CandidateGossipMap:
 
         self.next_shared_cp_id += 1
         self.candidates.append(new_candidate)
+        if trace_events is not None:
+            trace_events.append(
+                {
+                    "phase": phase,
+                    "matched": False,
+                    "receiver_id": receiver_id,
+                    "sender_id": int(message.agent_id),
+                    "local_cp_id": int(message.local_cp_id),
+                    "shared_cp_id": int(new_candidate.shared_cp_id),
+                    "step": int(message.step),
+                    "gossip_round": gossip_round,
+                    "message_position": np.asarray(message.position, dtype=float).copy(),
+                    "pre_merge_position": None,
+                    "post_merge_position": new_candidate.position.copy(),
+                }
+            )
 
         return new_candidate
 
@@ -295,19 +361,30 @@ class CandidateGossipMap:
         messages = []
 
         for candidate in self.candidates:
-            messages.append(
-                CandidateMessage(
-                    agent_id=agent_id,
-                    local_cp_id=candidate.shared_cp_id,
-                    position=candidate.position.copy(),
-                    normal=candidate.normal.copy(),
-                    confidence=float(candidate.confidence),
-                    area_support=float(candidate.area_support),
-                    parent_segment_id=-1,
-                    parent_plane_equation=candidate.parent_plane_equation.copy(),
-                    step=step,
+            observation_keys = sorted(candidate.observation_keys)
+            if not observation_keys:
+                observation_keys = [
+                    (
+                        int(agent_id),
+                        int(candidate.shared_cp_id),
+                        int(candidate.first_seen_step),
+                    )
+                ]
+
+            for source_agent_id, source_local_cp_id, source_step in observation_keys:
+                messages.append(
+                    CandidateMessage(
+                        agent_id=int(source_agent_id),
+                        local_cp_id=int(source_local_cp_id),
+                        position=candidate.position.copy(),
+                        normal=candidate.normal.copy(),
+                        confidence=float(candidate.confidence),
+                        area_support=float(candidate.area_support),
+                        parent_segment_id=-1,
+                        parent_plane_equation=candidate.parent_plane_equation.copy(),
+                        step=int(source_step),
+                    )
                 )
-            )
 
         return messages
 

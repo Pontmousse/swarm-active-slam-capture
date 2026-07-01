@@ -30,7 +30,7 @@ from visualization.geometry_helpers import (
 #############################################################################################
 # Run gate — set True to open interactive matplotlib animation (no GIF save).
 #############################################################################################
-INTERACTIVE_PREVIEW = True
+INTERACTIVE_PREVIEW = False
 
 
 def _default_agents_pickle() -> Path:
@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--highlight-agent",
         type=int,
-        default=1,
+        default=2,
         help="1-based agent id to highlight (merged map + trail).",
     )
     parser.add_argument(
@@ -87,6 +87,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=8000,
         help="Max merged-map points drawn per frame.",
+    )
+    parser.add_argument(
+        "--map-point-size",
+        type=float,
+        default=4.0,
+        help="Matplotlib scatter marker size for merged-map points.",
     )
     parser.add_argument(
         "--downsample",
@@ -136,6 +142,8 @@ def run_animation(args: argparse.Namespace) -> Path | None:
     downsample = args.downsample if args.downsample is not None else _default_downsample()
     downsample = max(1, int(downsample))
     agents_history = _load_history(pickle_path, downsample)
+    if len(agents_history) > 301:
+        agents_history = agents_history[:301]
 
     n_agents = len(agents_history[0])
     highlight = int(args.highlight_agent)
@@ -158,7 +166,16 @@ def run_animation(args: argparse.Namespace) -> Path | None:
     ax.set_ylim(limits[2], limits[3])
     ax.set_zlim(limits[4], limits[5])
 
-    map_scatter = ax.scatter([], [], [], s=1, c="purple", alpha=0.35, depthshade=True, label="MergedMapSet")
+    map_scatter = ax.scatter(
+        [],
+        [],
+        [],
+        s=float(args.map_point_size),
+        c="purple",
+        alpha=0.35,
+        depthshade=True,
+        label="MergedMapSet",
+    )
     trail_lines = []
     cube_lines = []
     arrow_quivers = []

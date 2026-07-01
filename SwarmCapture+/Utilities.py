@@ -86,7 +86,11 @@ def _coverage():
 
 def _update_map_coverage_and_explore(Spacecraft, target_com=None, min_points=10, explore_offset_distance=0.0):
     cov = _coverage()
-    pts = _as_points_array(Spacecraft.get("MergedMapSet"))
+    
+    pts = _as_points_array(Spacecraft.get("MergedMapSharedSet"))
+    if len(pts) == 0:
+        pts = _as_points_array(Spacecraft.get("MergedMapSet"))
+
     if len(pts) < min_points:
         Spacecraft["MapCoverageRatio"] = 0.0
         Spacecraft["MapEllipsoid"] = None

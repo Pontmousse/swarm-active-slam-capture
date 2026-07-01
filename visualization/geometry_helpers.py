@@ -152,16 +152,23 @@ def subsample_points(points: np.ndarray, max_points: int, seed: int = 0) -> np.n
     return points[idx]
 
 
+# def get_merged_map_points(agent: dict, max_points: int, frame_idx: int) -> np.ndarray:
+#     pts = to_points_array(agent.get("MergedMapSet"))
+#     if len(pts) == 0:
+#         shared = to_points_array(agent.get("MergedMapSharedSet"))
+#         if len(shared) > 0:
+#             print(
+#                 f"[viz] frame {frame_idx}: MergedMapSet empty; "
+#                 "falling back to MergedMapSharedSet"
+#             )
+#             pts = shared
+#     return subsample_points(pts, max_points, seed=frame_idx)
+
+
 def get_merged_map_points(agent: dict, max_points: int, frame_idx: int) -> np.ndarray:
-    pts = to_points_array(agent.get("MergedMapSet"))
+    pts = to_points_array(agent.get("MergedMapSharedSet"))
     if len(pts) == 0:
-        shared = to_points_array(agent.get("MergedMapSharedSet"))
-        if len(shared) > 0:
-            print(
-                f"[viz] frame {frame_idx}: MergedMapSet empty; "
-                "falling back to MergedMapSharedSet"
-            )
-            pts = shared
+        pts = to_points_array(agent.get("MergedMapSet"))
     return subsample_points(pts, max_points, seed=frame_idx)
 
 

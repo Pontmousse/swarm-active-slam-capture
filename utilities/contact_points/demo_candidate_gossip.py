@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import animation
 
 UTILITIES_DIR = Path(__file__).resolve().parents[1]
 if str(UTILITIES_DIR) not in sys.path:
@@ -91,19 +93,19 @@ def run_local_perception(
 ):
     plane_segments, _ = segment_planes_ransac(
         points,
-        max_planes=20,
-        distance_threshold=0.035,
+        max_planes=10,
+        distance_threshold=0.02,
         ransac_n=3,
-        num_iterations=1200,
-        min_inliers=50,
-        min_remaining_points=50,
+        num_iterations=2500,
+        min_inliers=80,
+        min_remaining_points=80,
     )
 
     contact_points = generate_contact_points_from_segments(
         plane_segments,
         contact_spacing=contact_spacing,
-        min_points_per_candidate=8,
-        boundary_margin=0.15,
+        min_points_per_candidate=16,
+        boundary_margin=0.20,
     )
 
     messages = make_candidate_messages(
@@ -116,19 +118,53 @@ def run_local_perception(
     return plane_segments, contact_points, messages
 
 
+def perturb_candidate_messages_for_demo(
+    messages,
+    agent_id: int,
+    offset_scale: float,
+    noise_scale: float,
+    seed: int,
+):
+    if offset_scale == 0.0 and noise_scale == 0.0:
+        return messages
+
+    angle = 2.0 * np.pi * agent_id / 3.0
+    offset = float(offset_scale) * np.array([
+        np.cos(angle),
+        np.sin(angle),
+        0.35 * np.sin(2.0 * angle),
+    ])
+    rng = np.random.default_rng(seed)
+
+    for message in messages:
+        message.position = np.asarray(message.position, dtype=float).copy()
+        message.position += offset
+        if noise_scale > 0.0:
+            message.position += rng.normal(scale=float(noise_scale), size=3)
+
+    return messages
+
+
 def gossip_all_to_all(
     maps: list[CandidateGossipMap],
     thresholds: CandidateMatchThresholds,
     step: int,
     gossip_rounds: int,
+    snapshot_callback=None,
 ) -> None:
-    for _ in range(gossip_rounds):
+    for gossip_round in range(gossip_rounds):
+        round_start = time.time()
+        round_trace_events = []
+        print(f"[gossip] step={step} round={gossip_round + 1}/{gossip_rounds}: exporting messages...")
         outgoing_by_agent = [
             gossip_map.export_messages(agent_id=agent_id, step=step)
             for agent_id, gossip_map in enumerate(maps)
         ]
+        outgoing_counts = [len(messages) for messages in outgoing_by_agent]
+        print(f"[gossip] step={step} round={gossip_round + 1}/{gossip_rounds}: outgoing counts={outgoing_counts}")
 
         for receiver_id, gossip_map in enumerate(maps):
+            receiver_start = time.time()
             received_messages = []
 
             for sender_id, messages in enumerate(outgoing_by_agent):
@@ -137,11 +173,33 @@ def gossip_all_to_all(
 
                 received_messages.extend(messages)
 
+            before_count = len(gossip_map.candidates)
+            print(
+                f"[gossip] step={step} round={gossip_round + 1}/{gossip_rounds} "
+                f"receiver={receiver_id}: received={len(received_messages)} "
+                f"candidates_before={before_count}"
+            )
             gossip_map.update_with_messages(
                 messages=received_messages,
                 thresholds=thresholds,
                 current_step=step,
+                trace_events=round_trace_events,
+                receiver_id=receiver_id,
+                gossip_round=gossip_round + 1,
+                phase="gossip",
             )
+            print(
+                f"[gossip] step={step} round={gossip_round + 1}/{gossip_rounds} "
+                f"receiver={receiver_id}: candidates_after={len(gossip_map.candidates)} "
+                f"dt={time.time() - receiver_start:.2f}s"
+            )
+
+        if snapshot_callback is not None:
+            snapshot_callback(gossip_round + 1, round_trace_events)
+        print(
+            f"[gossip] step={step} round={gossip_round + 1}/{gossip_rounds}: "
+            f"done events={len(round_trace_events)} dt={time.time() - round_start:.2f}s"
+        )
 
 
 def pairwise_map_overlap(
@@ -342,9 +400,11 @@ def plot_final_maps(
     )
 
     cmap = plt.get_cmap("tab10")
+    markers = ["o", "s", "^", "D", "P", "X", "v", "<", ">"]
 
     for agent_id in range(trajectories.shape[1]):
         color = cmap(agent_id)
+        marker = markers[agent_id % len(markers)]
         trajectory = trajectories[:, agent_id, :]
 
         ax.plot(
@@ -363,7 +423,7 @@ def plot_final_maps(
             trajectory[-1, 2],
             s=120,
             color=color,
-            marker="^",
+            marker=marker,
             edgecolors="black",
         )
 
@@ -374,6 +434,7 @@ def plot_final_maps(
             continue
 
         color = cmap(agent_id)
+        marker = markers[agent_id % len(markers)]
 
         ax.scatter(
             positions[:, 0],
@@ -382,6 +443,7 @@ def plot_final_maps(
             s=90,
             color=color,
             edgecolors="black",
+            marker=marker,
             label=f"agent {agent_id} shared candidates",
         )
 
@@ -508,6 +570,274 @@ def plot_gossip_metrics(
         plt.close(fig)
 
 
+def snapshot_gossip_state(
+    step: int,
+    gossip_round: int,
+    agent_positions: np.ndarray,
+    maps: list[CandidateGossipMap],
+    thresholds: CandidateMatchThresholds,
+    trace_events: list[dict] | None = None,
+) -> dict:
+    agent_snapshots = []
+
+    for gossip_map in maps:
+        positions, normals, ids = gossip_map.as_arrays()
+        confidences = np.array(
+            [candidate.confidence for candidate in gossip_map.candidates],
+            dtype=float,
+        )
+        support_counts = np.array(
+            [len(candidate.supporting_agents) for candidate in gossip_map.candidates],
+            dtype=int,
+        )
+        agent_snapshots.append(
+            {
+                "positions": positions.copy(),
+                "normals": normals.copy(),
+                "ids": ids.copy(),
+                "confidences": confidences,
+                "support_counts": support_counts,
+            }
+        )
+
+    return {
+        "step": int(step),
+        "gossip_round": int(gossip_round),
+        "agent_positions": np.asarray(agent_positions, dtype=float).copy(),
+        "agents": agent_snapshots,
+        "metrics": collect_gossip_metrics(step, maps, thresholds),
+        "trace_events": list(trace_events or []),
+    }
+
+
+def find_cross_agent_candidate_matches(snapshot: dict, position_threshold: float) -> list[tuple[np.ndarray, np.ndarray]]:
+    matches = []
+    agents = snapshot["agents"]
+
+    for agent_a in range(len(agents)):
+        positions_a = agents[agent_a]["positions"]
+        if len(positions_a) == 0:
+            continue
+        for agent_b in range(agent_a + 1, len(agents)):
+            positions_b = agents[agent_b]["positions"]
+            if len(positions_b) == 0:
+                continue
+            for pos_a in positions_a:
+                dists = np.linalg.norm(positions_b - pos_a, axis=1)
+                if len(dists) == 0:
+                    continue
+                idx = int(np.argmin(dists))
+                if dists[idx] <= position_threshold:
+                    matches.append((pos_a.copy(), positions_b[idx].copy()))
+
+    return matches
+
+
+def event_position(event: dict, key: str):
+    value = event.get(key)
+    if value is None:
+        return None
+    return np.asarray(value, dtype=float)
+
+
+def save_gossip_animation(
+    full_points: np.ndarray,
+    trajectories: np.ndarray,
+    snapshot_history: list[dict],
+    save_path: str,
+    thresholds: CandidateMatchThresholds,
+    interval_ms: int = 1200,
+) -> None:
+    if len(snapshot_history) == 0:
+        return
+
+    save_path = str(save_path)
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    frame_repeat = max(1, int(round(float(interval_ms) / 500.0)))
+    animation_frame_indices = [
+        frame_idx
+        for frame_idx in range(len(snapshot_history))
+        for _ in range(frame_repeat)
+    ]
+    print(
+        f"[gif] Saving {len(snapshot_history)} logical frames "
+        f"({len(animation_frame_indices)} encoded frames, repeat={frame_repeat}) -> {save_path}"
+    )
+
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection="3d")
+    cmap = plt.get_cmap("tab10")
+    markers = ["o", "s", "^", "D", "P", "X", "v", "<", ">"]
+
+    target_stride = max(1, len(full_points) // 1800)
+    target_points_viz = full_points[::target_stride]
+    all_plot_points = np.vstack([full_points, trajectories.reshape(-1, 3)])
+    set_axes_equal(ax, all_plot_points)
+    max_step = max(snapshot["step"] for snapshot in snapshot_history)
+
+    def update(frame_idx: int):
+        snapshot = snapshot_history[frame_idx]
+        step = snapshot["step"]
+        gossip_round = snapshot["gossip_round"]
+        ax.cla()
+        ax.scatter(
+            target_points_viz[:, 0],
+            target_points_viz[:, 1],
+            target_points_viz[:, 2],
+            s=1,
+            alpha=0.018,
+            c="gray",
+            label="mock target",
+        )
+
+        total_candidates = 0
+        multi_agent_candidates = 0
+        match_lines = find_cross_agent_candidate_matches(snapshot, thresholds.position_threshold)
+        trace_events = snapshot.get("trace_events", [])
+
+        for agent_id, agent_snapshot in enumerate(snapshot["agents"]):
+            color = cmap(agent_id)
+            trajectory = trajectories[: step + 1, agent_id, :]
+            agent_position = snapshot["agent_positions"][agent_id]
+            marker = markers[agent_id % len(markers)]
+
+            ax.plot(
+                trajectory[:, 0],
+                trajectory[:, 1],
+                trajectory[:, 2],
+                color=color,
+                linewidth=1.0,
+                alpha=0.45,
+            )
+            ax.scatter(
+                agent_position[0],
+                agent_position[1],
+                agent_position[2],
+                s=110,
+                color=color,
+                marker=marker,
+                edgecolors="black",
+                label=f"agent {agent_id}",
+            )
+
+            positions = agent_snapshot["positions"]
+            normals = agent_snapshot["normals"]
+            support_counts = agent_snapshot["support_counts"]
+            confidences = agent_snapshot["confidences"]
+
+            if len(positions) == 0:
+                continue
+
+            total_candidates += len(positions)
+            multi_agent_candidates += int(np.sum(support_counts > 1))
+            visual_offsets = np.zeros_like(positions)
+            if len(positions) > 0:
+                angles = 2.0 * np.pi * agent_id / max(1, len(snapshot["agents"]))
+                visual_offsets[:] = 0.035 * np.array([np.cos(angles), np.sin(angles), 0.25 * np.sin(2.0 * angles)])
+            positions_viz = positions + visual_offsets
+            sizes = 35.0 + 55.0 * np.clip(confidences, 0.0, 1.0) + 55.0 * np.clip(support_counts - 1, 0, None)
+            alphas = 0.45 + 0.45 * np.clip(confidences, 0.0, 1.0)
+
+            ax.scatter(
+                positions_viz[:, 0],
+                positions_viz[:, 1],
+                positions_viz[:, 2],
+                s=sizes,
+                color=color,
+                alpha=float(np.mean(alphas)) if len(alphas) else 0.85,
+                edgecolors="black",
+                linewidths=np.where(support_counts > 1, 1.6, 0.6),
+                marker=marker,
+            )
+            ax.quiver(
+                positions_viz[:, 0],
+                positions_viz[:, 1],
+                positions_viz[:, 2],
+                normals[:, 0],
+                normals[:, 1],
+                normals[:, 2],
+                length=0.12,
+                color=color,
+                linewidth=0.7,
+                alpha=0.55,
+            )
+
+        for pos_a, pos_b in match_lines:
+            xs, ys, zs = zip(pos_a, pos_b)
+            ax.plot(xs, ys, zs, color="black", linewidth=0.7, alpha=0.22)
+
+        for event in trace_events:
+            receiver_id = event.get("receiver_id")
+            sender_id = event.get("sender_id")
+            receiver_color = cmap(int(receiver_id) % 10) if receiver_id is not None else "black"
+            sender_color = cmap(int(sender_id) % 10) if sender_id is not None else receiver_color
+            sender_marker = markers[int(sender_id) % len(markers)] if sender_id is not None else "o"
+            message_pos = event_position(event, "message_position")
+            pre_pos = event_position(event, "pre_merge_position")
+            post_pos = event_position(event, "post_merge_position")
+
+            if message_pos is not None:
+                ax.scatter(
+                    message_pos[0],
+                    message_pos[1],
+                    message_pos[2],
+                    s=150,
+                    marker=sender_marker,
+                    facecolors="none",
+                    edgecolors=sender_color,
+                    linewidths=1.8,
+                    alpha=0.95,
+                )
+
+            if pre_pos is not None:
+                ax.scatter(
+                    pre_pos[0],
+                    pre_pos[1],
+                    pre_pos[2],
+                    s=105,
+                    marker="x",
+                    color=receiver_color,
+                    linewidths=1.6,
+                    alpha=0.9,
+                )
+
+            if pre_pos is not None and post_pos is not None:
+                xs, ys, zs = zip(pre_pos, post_pos)
+                ax.plot(xs, ys, zs, color=receiver_color, linewidth=2.0, alpha=0.8)
+            elif message_pos is not None and post_pos is not None and not event.get("matched", False):
+                xs, ys, zs = zip(message_pos, post_pos)
+                ax.plot(xs, ys, zs, color=sender_color, linewidth=1.2, alpha=0.45, linestyle=":")
+
+        set_axes_equal(ax, all_plot_points)
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        ax.view_init(elev=24, azim=-42)
+        ax.set_title(
+            f"Candidate Gossip | step {step}/{max_step} | round {gossip_round} | "
+            f"candidates={total_candidates} | multi-agent={multi_agent_candidates} | "
+            f"events={len(trace_events)}"
+        )
+        ax.legend(loc="upper right")
+        fig.tight_layout()
+        return []
+
+    ani = animation.FuncAnimation(
+        fig,
+        update,
+        frames=animation_frame_indices,
+        interval=500,
+        repeat=False,
+        blit=False,
+    )
+    ani.save(
+        save_path,
+        writer=animation.PillowWriter(fps=2),
+    )
+    plt.close(fig)
+    print(f"Saved gossip animation to: {save_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Demo decentralized contact candidate memory and gossip."
@@ -516,7 +846,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=6)
     parser.add_argument("--num-steps", type=int, default=5)
     parser.add_argument("--gossip-rounds", type=int, default=2)
-    parser.add_argument("--contact-spacing", type=float, default=1.0)
+    parser.add_argument("--contact-spacing", type=float, default=1.25)
     parser.add_argument("--orbit-radius", type=float, default=5.2)
     parser.add_argument("--z-amplitude", type=float, default=1.2)
     parser.add_argument("--angular-rate", type=float, default=0.45)
@@ -524,8 +854,12 @@ def main() -> None:
     parser.add_argument("--max-surface-angle-deg", type=float, default=85.0)
     parser.add_argument("--max-points-per-agent", type=int, default=650)
     parser.add_argument("--max-print-candidates", type=int, default=12)
+    parser.add_argument("--demo-agent-offset", type=float, default=0.20)
+    parser.add_argument("--candidate-position-noise", type=float, default=0.0)
+    parser.add_argument("--position-threshold", type=float, default=0.55)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--save", type=str, default=None)
+    parser.add_argument("--save-gif", type=str, default=None)
     parser.add_argument("--no-show", action="store_true")
 
     args = parser.parse_args()
@@ -545,7 +879,7 @@ def main() -> None:
     )
 
     thresholds = CandidateMatchThresholds(
-        position_threshold=0.35,
+        position_threshold=float(args.position_threshold),
         normal_angle_threshold_deg=20.0,
         parent_plane_angle_threshold_deg=20.0,
         parent_plane_distance_threshold=0.08,
@@ -556,13 +890,19 @@ def main() -> None:
         for _ in range(num_agents)
     ]
     metric_history = []
+    snapshot_history = []
 
     for step in range(args.num_steps):
+        step_start = time.time()
+        print(f"\n[demo] step={step}/{args.num_steps - 1}: starting local perception")
         agent_positions = trajectories[step]
         visible_counts = []
         local_counts = []
+        local_trace_events = []
 
         for agent_id in range(num_agents):
+            agent_start = time.time()
+            print(f"[local] step={step} agent={agent_id}: selecting visible points...")
             partial_points = select_visible_points_for_agent(
                 full_points=full_points,
                 full_normals=full_normals,
@@ -574,27 +914,78 @@ def main() -> None:
                 seed=args.seed + 100 * step + agent_id,
             )
 
+            print(
+                f"[local] step={step} agent={agent_id}: "
+                f"visible_points={len(partial_points)} running RANSAC/contact extraction..."
+            )
             _, contact_points, messages = run_local_perception(
                 points=partial_points,
                 agent_id=agent_id,
                 step=step,
                 contact_spacing=args.contact_spacing,
             )
+            messages = perturb_candidate_messages_for_demo(
+                messages=messages,
+                agent_id=agent_id,
+                offset_scale=float(args.demo_agent_offset),
+                noise_scale=float(args.candidate_position_noise),
+                seed=args.seed + 1000 * step + agent_id,
+            )
 
+            before_count = len(maps[agent_id].candidates)
+            print(
+                f"[local] step={step} agent={agent_id}: "
+                f"local_contact_points={len(contact_points)} messages={len(messages)} "
+                f"candidates_before={before_count} updating local map..."
+            )
             maps[agent_id].update_with_messages(
                 messages=messages,
                 thresholds=thresholds,
                 current_step=step,
+                trace_events=local_trace_events,
+                receiver_id=agent_id,
+                gossip_round=0,
+                phase="local",
+            )
+            print(
+                f"[local] step={step} agent={agent_id}: "
+                f"candidates_after={len(maps[agent_id].candidates)} "
+                f"dt={time.time() - agent_start:.2f}s"
             )
 
             visible_counts.append(len(partial_points))
             local_counts.append(len(contact_points))
+
+        agent_positions_for_snapshot = agent_positions.copy()
+
+        def record_round_snapshot(gossip_round: int, trace_events: list[dict] | None = None) -> None:
+            snapshot_history.append(
+                snapshot_gossip_state(
+                    step=step,
+                    gossip_round=gossip_round,
+                    agent_positions=agent_positions_for_snapshot,
+                    maps=maps,
+                    thresholds=thresholds,
+                    trace_events=trace_events,
+                )
+            )
+
+        record_round_snapshot(0, local_trace_events)
+        print(
+            f"[demo] step={step}: local phase done local_events={len(local_trace_events)} "
+            f"candidate_counts={[len(gossip_map.candidates) for gossip_map in maps]}"
+        )
 
         gossip_all_to_all(
             maps=maps,
             thresholds=thresholds,
             step=step,
             gossip_rounds=args.gossip_rounds,
+            snapshot_callback=record_round_snapshot,
+        )
+        print(
+            f"[demo] step={step}: gossip done candidate_counts="
+            f"{[len(gossip_map.candidates) for gossip_map in maps]}"
         )
 
         for gossip_map in maps:
@@ -604,6 +995,10 @@ def main() -> None:
                 decay_rate=0.95,
                 min_confidence=0.1,
             )
+        print(
+            f"[demo] step={step}: decay done candidate_counts="
+            f"{[len(gossip_map.candidates) for gossip_map in maps]}"
+        )
 
         print_timestep_summary(
             step=step,
@@ -621,6 +1016,10 @@ def main() -> None:
                 maps=maps,
                 thresholds=thresholds,
             )
+        )
+        print(
+            f"[demo] step={step}/{args.num_steps - 1}: finished "
+            f"dt={time.time() - step_start:.2f}s snapshots={len(snapshot_history)}"
         )
 
     print_final_maps(
@@ -652,6 +1051,15 @@ def main() -> None:
         save_path=metrics_save_path,
         show=not args.no_show,
     )
+
+    if args.save_gif is not None:
+        save_gossip_animation(
+            full_points=full_points,
+            trajectories=trajectories[:args.num_steps],
+            snapshot_history=snapshot_history,
+            save_path=args.save_gif,
+            thresholds=thresholds,
+        )
 
 
 if __name__ == "__main__":
